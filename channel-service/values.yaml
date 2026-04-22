@@ -19,7 +19,7 @@ imagePullSecrets:
   - name: dockerhub-pull-secret
 service:
   type: ClusterIP
-  port: 90902
+  port: 909022
   healthPort: 8080
 # ---------------------------------------------------------------------------
 # Dapr sidecar injection
