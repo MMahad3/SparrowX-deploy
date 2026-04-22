@@ -28,7 +28,7 @@ service:
 dapr:
   enabled: true
   appId: platform-service-channel
-  appPort: "8080"
+  appPort: "111111"
   sidecarHttpPort: "3500"
   sidecarGrpcPort: "50001"
   logLevel: info
