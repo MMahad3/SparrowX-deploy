@@ -175,9 +175,11 @@ def main():
         log(f"Rows after input-scope filter: {len(output)}")
 
         # Safety: if AI output is not usable, fallback to normalized input.
-        if not isinstance(output, list):
-            log("AI output invalid type; falling back to normalized changes")
-            output = normalize_changes(changes)
+        if (not isinstance(output, list)) or (
+            normalized_changes and len(output) == 0
+        ):
+            log("AI output unusable; falling back to normalized changes")
+            output = fallback(normalized_changes)
     else:
         log("GOOGLE_API_KEY is missing, using fallback mode")
         output = fallback(normalized_changes)

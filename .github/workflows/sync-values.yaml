@@ -94,16 +94,18 @@ jobs:
               old_val=$(jq -c --arg key "$key" 'getpath($key | split(".") | map(tonumber? // .)) // "__MISSING__"' old.json)
               new_val=$(jq -c --arg key "$key" 'getpath($key | split(".") | map(tonumber? // .)) // "__MISSING__"' new.json)
 
-              if [ "$old_val" != "$new_val" ]; then
-                jq --arg service "$service" \
-                   --arg key "$key" \
-                   --arg new "$new_val" \
-                   '. += [{
-                      service: $service,
-                      key: $key,
-                      value: $new
-                   }]' changes.json > tmp.json && mv tmp.json changes.json
-              fi
+                            if [ "$old_val" != "$new_val" ]; then
+                                jq --arg service "$service" \
+                                    --arg key "$key" \
+                                    --arg old "$old_val" \
+                                    --arg new "$new_val" \
+                                    '. += [{
+                                        service: $service,
+                                        key: $key,
+                                        old_value: $old,
+                                        value: $new
+                                    }]' changes.json > tmp.json && mv tmp.json changes.json
+                            fi
             done < all_keys.txt
           done
 
@@ -147,17 +149,80 @@ jobs:
               return parts[0] + "".join(p[:1].upper() + p[1:] for p in parts[1:]) + "Service"
 
 
-          def set_path(root, path_parts, value):
+          def parse_path_parts(path):
+              parts = []
+              for p in path.split("."):
+                  if not p:
+                      continue
+                  parts.append(int(p) if p.isdigit() else p)
+              return parts
+
+
+          def get_by_path(root, path_parts):
+              current = root
+              for part in path_parts:
+                  if isinstance(part, int):
+                      if not isinstance(current, list) or part < 0 or part >= len(current):
+                          return False, None
+                      current = current[part]
+                  else:
+                      if not isinstance(current, dict) or part not in current:
+                          return False, None
+                      current = current[part]
+              return True, current
+
+
+          def set_by_path(root, path_parts, value):
+              if not path_parts:
+                  return False
+
               current = root
               for part in path_parts[:-1]:
-                  if part not in current or current[part] is None:
-                      current[part] = {}
-                  current = current[part]
-              current[path_parts[-1]] = value
+                  if isinstance(part, int):
+                      if not isinstance(current, list) or part < 0 or part >= len(current):
+                          return False
+                      current = current[part]
+                  else:
+                      if not isinstance(current, dict) or part not in current:
+                          return False
+                      current = current[part]
+
+              leaf = path_parts[-1]
+              if isinstance(leaf, int):
+                  if not isinstance(current, list) or leaf < 0 or leaf >= len(current):
+                      return False
+                  current[leaf] = value
+                  return True
+
+              if not isinstance(current, dict) or leaf not in current:
+                  return False
+              current[leaf] = value
+              return True
+
+
+          def iter_scalar_paths(node, prefix):
+              if isinstance(node, dict):
+                  for k, v in node.items():
+                      yield from iter_scalar_paths(v, prefix + [k])
+                  return
+
+              if isinstance(node, list):
+                  for i, v in enumerate(node):
+                      yield from iter_scalar_paths(v, prefix + [i])
+                  return
+
+              yield prefix, node
+
+
+          def matches_tail(path_parts, tail):
+              if not tail or len(path_parts) < len(tail):
+                  return False
+              return path_parts[-len(tail):] == tail
 
 
           file_path = Path("chart/values.yaml")
           changes_path = Path("../ai_output.json")
+          source_changes_path = Path("../changes.json")
 
           if not file_path.exists():
               print("Target file not found: chart/values.yaml")
@@ -165,6 +230,13 @@ jobs:
 
           with changes_path.open("r", encoding="utf-8") as f:
               rows = json.load(f)
+
+          source_changes_lookup = {}
+          if source_changes_path.exists():
+              with source_changes_path.open("r", encoding="utf-8") as f:
+                  source_rows = json.load(f)
+              for r in source_rows:
+                  source_changes_lookup[(r.get("service"), r.get("key"))] = r
 
           yaml = YAML()
           yaml.preserve_quotes = True
@@ -174,6 +246,7 @@ jobs:
               data = yaml.load(f) or {}
 
           applied = 0
+          skipped = 0
           for row in rows:
               service = row.get("service")
               key = row.get("key")
@@ -181,24 +254,73 @@ jobs:
 
               if not service or not key:
                   print(f"Skipping invalid row: {row}")
+                  skipped += 1
                   continue
 
               service_section = service_to_section(service)
-              target_key = key if key.startswith(f"{service_section}.") else f"{service_section}.{key}"
-              path_parts = [p for p in target_key.split(".") if p]
-
-              if not path_parts:
-                  print(f"Skipping empty target key for row: {row}")
+              if service_section not in data or not isinstance(data[service_section], (dict, list)):
+                  print(f"Skipping: service section not found for {service} ({service_section})")
+                  skipped += 1
                   continue
 
-              print(f"Updating chart/values.yaml -> {target_key} = {json.dumps(value)}")
-              set_path(data, path_parts, value)
+              service_root = data[service_section]
+              rel_key = key
+              service_prefix = f"{service_section}."
+              if rel_key.startswith(service_prefix):
+                  rel_key = rel_key[len(service_prefix):]
+              rel_parts = parse_path_parts(rel_key)
+
+              if not rel_parts:
+                  print(f"Skipping empty target key for row: {row}")
+                  skipped += 1
+                  continue
+
+              source_row = source_changes_lookup.get((service, key), {})
+              old_value = source_row.get("old_value")
+
+              direct_exists, _ = get_by_path(service_root, rel_parts)
+              chosen_parts = rel_parts if direct_exists else None
+
+              if chosen_parts is None:
+                  candidates = []
+                  for p, current_value in iter_scalar_paths(service_root, []):
+                      if matches_tail(p, rel_parts) or p[-1:] == rel_parts[-1:]:
+                          candidates.append((p, current_value))
+
+                  if old_value is not None:
+                      old_filtered = [c for c in candidates if c[1] == old_value]
+                      if old_filtered:
+                          candidates = old_filtered
+
+                  if len(candidates) == 1:
+                      chosen_parts = candidates[0][0]
+                  elif len(candidates) > 1:
+                      print(
+                          f"Skipping ambiguous match for {service_section}.{rel_key}: "
+                          f"{len(candidates)} candidate paths"
+                      )
+                      skipped += 1
+                      continue
+
+              if chosen_parts is None:
+                  print(f"Skipping: no matching path found for {service_section}.{rel_key}")
+                  skipped += 1
+                  continue
+
+              full_path = [service_section] + chosen_parts
+              if not set_by_path(data, full_path, value):
+                  print(f"Skipping: failed to set path {full_path}")
+                  skipped += 1
+                  continue
+
+              dotted = ".".join(str(p) for p in full_path)
+              print(f"Updating chart/values.yaml -> {dotted} = {json.dumps(value)}")
               applied += 1
 
           with file_path.open("w", encoding="utf-8") as f:
               yaml.dump(data, f)
 
-          print(f"Applied {applied} change(s) to chart/values.yaml")
+          print(f"Applied {applied} change(s), skipped {skipped} change(s) in chart/values.yaml")
           PY
 
           git diff
