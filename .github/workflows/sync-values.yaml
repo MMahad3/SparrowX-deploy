@@ -64,6 +64,7 @@ jobs:
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
           sudo apt-get update && sudo apt-get install -y jq
+          python3 -m pip install --upgrade pip requests
 
       # =========================
       # Extract diff
@@ -114,40 +115,12 @@ jobs:
       # =========================
       - name: AI Transform (with fallback)
         run: |
-          if [ -z "${{ secrets.OPENAI_API_KEY }}" ]; then
-            echo "No API key → using fallback"
-            cp changes.json ai_output.json
-          else
-            echo "Calling AI..."
-
-            RESPONSE=$(curl -s https://api.openai.com/v1/chat/completions \
-              -H "Authorization: Bearer ${{ secrets.OPENAI_API_KEY }}" \
-              -H "Content-Type: application/json" \
-              -d "{
-                \"model\": \"gpt-4o-mini\",
-                \"messages\": [
-                  {\"role\": \"system\", \"content\": \"Modify only values.\"},
-                  {\"role\": \"user\", \"content\": \"$(cat changes.json)\"}
-                ],
-                \"temperature\": 0
-              }")
-
-            RAW_CONTENT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "[]"')
-
-            # Normalize possible fenced output and enforce valid JSON array output.
-            CLEAN_CONTENT=$(printf "%s\n" "$RAW_CONTENT" | sed -e '1s/^```json[[:space:]]*$//' -e '1s/^```[[:space:]]*$//' -e '$s/^```[[:space:]]*$//')
-            printf "%s\n" "$CLEAN_CONTENT" > ai_output_raw.json
-
-            if jq -e . ai_output_raw.json >/dev/null 2>&1; then
-              jq -c 'if type == "array" then . else [] end' ai_output_raw.json > ai_output.json
-            else
-              echo "AI output was not valid JSON; using empty array."
-              echo "[]" > ai_output.json
-            fi
-          fi
+          python3 AI.py
 
           echo "AI OUTPUT:"
           cat ai_output.json
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
       # =========================
       # Apply changes safely
@@ -190,16 +163,16 @@ jobs:
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
 
-          BRANCH="auto/sync-${{ github.sha }}"
+          BRANCH="PLAT/sync-${{ github.sha }}"
           git checkout -b $BRANCH
 
           git add .
-          git commit -m "Auto sync from deploy repo" || echo "No changes to commit"
+          git commit -m "PLAT: Auto sync from deploy repo" || echo "No changes to commit"
 
           git push origin $BRANCH
 
           gh pr create \
-            --title "Auto Sync: deploy → helm" \
+            --title "PLAT: Auto Sync deploy to helm" \
             --body "Automated sync"
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
