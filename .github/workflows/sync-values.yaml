@@ -64,7 +64,7 @@ jobs:
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
           sudo apt-get update && sudo apt-get install -y jq
-          python3 -m pip install --upgrade pip requests
+          python3 -m pip install --upgrade pip requests ruamel.yaml
 
       # =========================
       # Extract diff
@@ -135,41 +135,71 @@ jobs:
             exit 0
           fi
 
-          jq -c '.[]?' ../ai_output.json | while IFS= read -r row; do
-            service=$(echo "$row" | jq -r '.service // empty')
-            key=$(echo "$row" | jq -r '.key // empty')
-            value_json=$(echo "$row" | jq -c '.value')
+          python3 - <<'PY'
+import json
+import sys
+from pathlib import Path
+from ruamel.yaml import YAML
 
-            if [ -z "$service" ] || [ -z "$key" ]; then
-              echo "Skipping invalid row: $row"
-              continue
-            fi
 
-            FILE="chart/values.yaml"
+def service_to_section(service):
+    parts = service.split("-")
+    return parts[0] + "".join(p[:1].upper() + p[1:] for p in parts[1:]) + "Service"
 
-            if [ ! -f "$FILE" ]; then
-              echo "Target file not found: $FILE"
-              exit 1
-            fi
 
-            service_section=$(echo "$service" | awk -F'-' '{
-              out=$1;
-              for (i=2; i<=NF; i++) {
-                out=out toupper(substr($i,1,1)) substr($i,2);
-              }
-              printf "%sService", out;
-            }')
+def set_path(root, path_parts, value):
+    current = root
+    for part in path_parts[:-1]:
+        if part not in current or current[part] is None:
+            current[part] = {}
+        current = current[part]
+    current[path_parts[-1]] = value
 
-            if [[ "$key" == "$service_section."* ]]; then
-              target_key="$key"
-            else
-              target_key="$service_section.$key"
-            fi
 
-            echo "Updating $FILE -> $target_key = $value_json"
+file_path = Path("chart/values.yaml")
+changes_path = Path("../ai_output.json")
 
-            yq eval ".$target_key = $value_json" -i "$FILE"
-          done
+if not file_path.exists():
+    print("Target file not found: chart/values.yaml")
+    sys.exit(1)
+
+with changes_path.open("r", encoding="utf-8") as f:
+    rows = json.load(f)
+
+yaml = YAML()
+yaml.preserve_quotes = True
+yaml.width = 4096
+
+with file_path.open("r", encoding="utf-8") as f:
+    data = yaml.load(f) or {}
+
+applied = 0
+for row in rows:
+    service = row.get("service")
+    key = row.get("key")
+    value = row.get("value")
+
+    if not service or not key:
+        print(f"Skipping invalid row: {row}")
+        continue
+
+    service_section = service_to_section(service)
+    target_key = key if key.startswith(f"{service_section}.") else f"{service_section}.{key}"
+    path_parts = [p for p in target_key.split(".") if p]
+
+    if not path_parts:
+        print(f"Skipping empty target key for row: {row}")
+        continue
+
+    print(f"Updating chart/values.yaml -> {target_key} = {json.dumps(value)}")
+    set_path(data, path_parts, value)
+    applied += 1
+
+with file_path.open("w", encoding="utf-8") as f:
+    yaml.dump(data, f)
+
+print(f"Applied {applied} change(s) to chart/values.yaml")
+PY
 
           git diff
 

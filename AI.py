@@ -144,6 +144,21 @@ def fallback(changes):
     return normalize_changes(changes)
 
 
+def filter_to_input_scope(ai_rows, normalized_changes):
+    allowed = {(row.get("service"), row.get("key")) for row in normalized_changes}
+    filtered = []
+
+    for row in ai_rows:
+        service = row.get("service")
+        key = row.get("key")
+        if (service, key) in allowed:
+            filtered.append(row)
+        else:
+            debug(f"Dropping out-of-scope AI row: {row}")
+
+    return filtered
+
+
 def main():
     with open("changes.json") as f:
         changes = json.load(f)
@@ -156,6 +171,8 @@ def main():
     if GOOGLE_API_KEY:
         log("Using AI for mapping + replacement decisions")
         output = call_ai(normalized_changes)
+        output = filter_to_input_scope(output, normalized_changes)
+        log(f"Rows after input-scope filter: {len(output)}")
 
         # Safety: if AI output is not usable, fallback to normalized input.
         if not isinstance(output, list):
