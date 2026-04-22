@@ -6,7 +6,6 @@ on:
       - Feature/values-syncing
     paths:
       - '**/values.yaml'
-      - '!.github/workflows/**'
 
 jobs:
   sync:
@@ -26,7 +25,6 @@ jobs:
       # =========================
       - name: Get changed files
         run: |
-          echo "Changed files:"
           git diff --name-only ${{ github.event.before }} ${{ github.sha }} > changed.txt
           cat changed.txt
 
@@ -49,7 +47,7 @@ jobs:
           echo "SERVICES=$SERVICES" >> $GITHUB_ENV
 
       # =========================
-      # Checkout Repo B (Helm)
+      # Checkout Repo B
       # =========================
       - name: Checkout Repo B (helm)
         uses: actions/checkout@v4
@@ -61,38 +59,31 @@ jobs:
       # =========================
       # Install tools
       # =========================
-      - name: Install yq + jq
+      - name: Install tools
         run: |
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
           sudo apt-get update && sudo apt-get install -y jq
 
       # =========================
-      # Generate structured diff
+      # Extract diff
       # =========================
       - name: Extract YAML diff
         run: |
           echo "[]" > changes.json
 
           echo "$SERVICES" | tr ' ' '\n' | while read service; do
-            echo "Processing: $service"
-
             FILE_PATH="$service/values.yaml"
 
             OLD_FILE="old_${service}.yaml"
             NEW_FILE="new_${service}.yaml"
 
-            # Old version
             git show ${{ github.event.before }}:$FILE_PATH > "$OLD_FILE" 2>/dev/null || echo "{}" > "$OLD_FILE"
-
-            # New version
             cp "$FILE_PATH" "$NEW_FILE"
 
-            # Convert YAML to JSON once, then use jq for stable path extraction
             yq eval -o=json '.' "$OLD_FILE" > old.json
             yq eval -o=json '.' "$NEW_FILE" > new.json
 
-            # Extract scalar key paths
             jq -r 'paths(scalars) | map(tostring) | join(".")' old.json > old_keys.txt
             jq -r 'paths(scalars) | map(tostring) | join(".")' new.json > new_keys.txt
 
@@ -103,119 +94,91 @@ jobs:
               new_val=$(jq -c --arg key "$key" 'getpath($key | split(".") | map(tonumber? // .)) // "__MISSING__"' new.json)
 
               if [ "$old_val" != "$new_val" ]; then
-                echo "Changed: $key | $old_val -> $new_val"
-
                 jq --arg service "$service" \
                    --arg key "$key" \
-                   --arg old "$old_val" \
                    --arg new "$new_val" \
                    '. += [{
                       service: $service,
                       key: $key,
-                      old: $old,
-                      new: $new
+                      value: $new
                    }]' changes.json > tmp.json && mv tmp.json changes.json
               fi
             done < all_keys.txt
-
           done
 
-          echo "FINAL DIFF:"
+          echo "CHANGES:"
           cat changes.json
 
       # =========================
-      # AI Transformation Layer
+      # AI or fallback
       # =========================
-      - name: AI Transform Changes
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      - name: AI Transform (with fallback)
         run: |
-          echo "Calling AI..."
+          if [ -z "${{ secrets.OPENAI_API_KEY }}" ]; then
+            echo "No API key → using fallback"
+            cp changes.json ai_output.json
+          else
+            echo "Calling AI..."
 
-          PROMPT=$(cat <<EOF
-          You are a DevOps configuration engine.
+            RESPONSE=$(curl -s https://api.openai.com/v1/chat/completions \
+              -H "Authorization: Bearer ${{ secrets.OPENAI_API_KEY }}" \
+              -H "Content-Type: application/json" \
+              -d "{
+                \"model\": \"gpt-4o-mini\",
+                \"messages\": [
+                  {\"role\": \"system\", \"content\": \"Modify only values.\"},
+                  {\"role\": \"user\", \"content\": \"$(cat changes.json)\"}
+                ],
+                \"temperature\": 0
+              }")
 
-          Rules:
-          - Only modify VALUES, never keys or structure
-          - If env is QA:
-            - ensure replicaCount >= 2
-            - apply test_ prefix if required
-          - Ensure OKD compatibility
-          - Return STRICT JSON only:
-          [
-            {
-              "service": "",
-              "key": "",
-              "value": ""
-            }
-          ]
-
-          INPUT:
-          $(cat changes.json)
-          EOF
-          )
-
-          RESPONSE=$(curl -s https://api.openai.com/v1/chat/completions \
-            -H "Authorization: Bearer $OPENAI_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d "{
-              \"model\": \"gpt-4o-mini\",
-              \"messages\": [
-                {\"role\": \"system\", \"content\": \"You are a strict DevOps transformer.\"},
-                {\"role\": \"user\", \"content\": \"$PROMPT\"}
-              ],
-              \"temperature\": 0
-            }")
-
-          echo "$RESPONSE" | jq -r '.choices[0].message.content' > ai_output.json
+            echo "$RESPONSE" | jq -r '.choices[0].message.content' > ai_output.json
+          fi
 
           echo "AI OUTPUT:"
           cat ai_output.json
 
       # =========================
-      # Apply AI changes to Helm repo
+      # Apply changes safely
       # =========================
       - name: Apply changes to Helm repo
         run: |
           cd helm-repo
 
-          echo "Applying AI changes..."
-
-          for row in $(cat ../ai_output.json | jq -c '.[]'); do
-            service=$(echo $row | jq -r '.service')
-            key=$(echo $row | jq -r '.key')
-            value=$(echo $row | jq -r '.value')
+          jq -c '.[]' ../ai_output.json | while read row; do
+            service=$(echo "$row" | jq -r '.service')
+            key=$(echo "$row" | jq -r '.key')
+            value=$(echo "$row" | jq -r '.value')
 
             FILE="$service/values.yaml"
 
             echo "Updating $FILE -> $key = $value"
 
-            yq eval ".$key = \"$value\"" -i "$FILE"
+            yq eval ".$key = $value" -i "$FILE"
           done
 
           git diff
 
       # =========================
-      # Create PR in Repo B
+      # Create PR
       # =========================
-      - name: Create PR in Helm repo
+      - name: Create PR
         run: |
           cd helm-repo
 
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
 
-          BRANCH="auto/ai-sync-${{ github.sha }}"
-
+          BRANCH="auto/sync-${{ github.sha }}"
           git checkout -b $BRANCH
 
           git add .
-          git commit -m "AI-driven sync from sparrowx-deploy"
+          git commit -m "Auto sync from deploy repo" || echo "No changes to commit"
 
           git push origin $BRANCH
 
           gh pr create \
-            --title "AI Sync: sparrowx-deploy → sparrowx-helm" \
-            --body "Automated AI-based values sync"
+            --title "Auto Sync: deploy → helm" \
+            --body "Automated sync"
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
