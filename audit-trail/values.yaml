@@ -37,7 +37,7 @@ dapr:
   sidecarHttpPort: "3500"
   sidecarGrpcPort: "50001"
   logLevel: info
-  enableApiLogging: "false"
+  enableApiLogging: "true_test"
 
 # ---------------------------------------------------------------------------
 # Service-specific ConfigMap  →  platform-service-audit-trail-config
