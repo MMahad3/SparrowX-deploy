@@ -6,6 +6,7 @@ on:
       - Feature/values-syncing
     paths:
       - '**/values.yaml'
+      - '!.github/workflows/**'
 
 jobs:
   detect-changes:
