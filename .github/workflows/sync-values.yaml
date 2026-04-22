@@ -65,3 +65,54 @@ jobs:
       - name: Show structure
         run: |
           ls -R helm-repo
+
+
+      - name: Exit if no values.yaml changed
+        if: env.VALUES_FILES == ''
+        run: |
+          echo "No values.yaml changes detected. Exiting."
+          exit 0
+
+      - name: Debug services
+        run: |
+          echo "Services detected:"
+          echo "$SERVICES"
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+        
+      - name: Extract YAML changes
+        run: |
+          echo "Processing services..."
+
+          for service in $SERVICES; do
+            echo "---- Service: $service ----"
+
+            FILE_PATH="$service/values.yaml"
+
+            # Get old version
+            git show ${{ github.event.before }}:$FILE_PATH > old.yaml || echo "{}" > old.yaml
+
+            # Get new version
+            cp $FILE_PATH new.yaml
+
+            echo "Old YAML:"
+            cat old.yaml
+            echo "New YAML:"
+            cat new.yaml
+
+            # Flatten both YAMLs
+            yq eval 'paths | join(".")' old.yaml | while read key; do
+              old_val=$(yq eval ".$key" old.yaml)
+              new_val=$(yq eval ".$key" new.yaml)
+
+              if [ "$old_val" != "$new_val" ]; then
+                echo "Changed: $key | $old_val → $new_val"
+              fi
+            done
+
+            echo "--------------------------"
+          done
