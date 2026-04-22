@@ -140,9 +140,12 @@ jobs:
           python3 - <<'PY'
           import json
           import sys
+          import re
           from pathlib import Path
           from ruamel.yaml import YAML
 
+
+          # --------------- service section resolution ---------------
 
           def service_to_section(service):
               parts = service.split("-")
@@ -161,115 +164,119 @@ jobs:
           def resolve_service_section(data, service):
               if not isinstance(data, dict):
                   return None
-
-              candidates = []
               camel = service_to_camel(service)
-              candidates.append(service_to_section(service))
-              candidates.append(camel)
-              candidates.append(camel + "Service")
-              candidates.append(service.replace("-", ""))
-              candidates.append(service)
-
-              for c in candidates:
+              for c in (service_to_section(service), camel, camel + "Service",
+                        service.replace("-", ""), service):
                   if c in data and isinstance(data[c], (dict, list)):
                       return c
+              ns = normalize_token(service)
+              matches = [k for k, v in data.items()
+                         if isinstance(v, (dict, list)) and ns in normalize_token(k)]
+              return matches[0] if len(matches) == 1 else None
 
-              normalized_service = normalize_token(service)
-              matches = []
-              for k, v in data.items():
-                  if not isinstance(v, (dict, list)):
-                      continue
-                  nk = normalize_token(k)
-                  if nk == normalized_service or nk.startswith(normalized_service) or normalized_service in nk:
-                      matches.append(k)
 
-              if len(matches) == 1:
-                  return matches[0]
-
-              return None
-
+          # --------------- path helpers ---------------
 
           def parse_path_parts(path):
               parts = []
               for p in path.split("."):
-                  if not p:
-                      continue
-                  parts.append(int(p) if p.isdigit() else p)
+                  if p:
+                      parts.append(int(p) if p.isdigit() else p)
               return parts
 
 
           def get_by_path(root, path_parts):
-              current = root
-              for part in path_parts:
-                  if isinstance(part, int):
-                      if not isinstance(current, list) or part < 0 or part >= len(current):
-                          return False, None
-                      current = current[part]
-                  else:
-                      if not isinstance(current, dict) or part not in current:
-                          return False, None
-                      current = current[part]
-              return True, current
-
-
-          def set_by_path(root, path_parts, value):
-              if not path_parts:
-                  return False
-
-              current = root
-              for part in path_parts[:-1]:
-                  if isinstance(part, int):
-                      if not isinstance(current, list) or part < 0 or part >= len(current):
-                          return False
-                      current = current[part]
-                  else:
-                      if not isinstance(current, dict) or part not in current:
-                          return False
-                      current = current[part]
-
-              leaf = path_parts[-1]
-              if isinstance(leaf, int):
-                  if not isinstance(current, list) or leaf < 0 or leaf >= len(current):
-                      return False
-                  current[leaf] = value
-                  return True
-
-              if not isinstance(current, dict) or leaf not in current:
-                  return False
-              current[leaf] = value
-              return True
+              cur = root
+              for p in path_parts:
+                  try:
+                      cur = cur[p]
+                  except (KeyError, IndexError, TypeError):
+                      return False, None
+              return True, cur
 
 
           def iter_scalar_paths(node, prefix):
               if isinstance(node, dict):
                   for k, v in node.items():
                       yield from iter_scalar_paths(v, prefix + [k])
-                  return
-
-              if isinstance(node, list):
+              elif isinstance(node, list):
                   for i, v in enumerate(node):
                       yield from iter_scalar_paths(v, prefix + [i])
-                  return
-
-              yield prefix, node
+              else:
+                  yield prefix, node
 
 
           def matches_tail(path_parts, tail):
-              if not tail or len(path_parts) < len(tail):
-                  return False
-              return path_parts[-len(tail):] == tail
+              return bool(tail) and len(path_parts) >= len(tail) and path_parts[-len(tail):] == tail
 
 
-          def detect_indent_step(text):
-              for raw in text.splitlines():
-                  line = raw.rstrip("\n")
-                  if not line.strip() or line.lstrip().startswith("#"):
-                      continue
-                  leading = len(line) - len(line.lstrip(" "))
-                  if leading > 0:
-                      return leading
-              return 2
+          # --------------- line-level surgical replacement ---------------
 
+          def get_value_line(data, path_parts):
+              """Return the (0-based) line number where the leaf VALUE lives using ruamel lc."""
+              cur = data
+              for p in path_parts[:-1]:
+                  try:
+                      cur = cur[p]
+                  except (KeyError, IndexError, TypeError):
+                      return None
+              leaf = path_parts[-1]
+              try:
+                  if isinstance(cur, list):
+                      row, _ = cur.lc.item(leaf)
+                  else:
+                      row, _ = cur.lc.value(leaf)
+                  return row
+              except Exception:
+                  return None
+
+
+          def scalar_to_str(value):
+              """Serialize a scalar to a safe YAML inline string."""
+              if isinstance(value, bool):
+                  return "true" if value else "false"
+              if isinstance(value, (int, float)):
+                  return str(value)
+              s = str(value)
+              needs_quote = (
+                  not s
+                  or s[0] in ('"', "'", '{', '[', '|', '>', '&', '*', '!', '%', '@', '`')
+                  or ':' in s or '#' in s
+                  or s.lower() in ('true', 'false', 'null', 'yes', 'no', 'on', 'off')
+                  or s != s.strip()
+              )
+              if needs_quote:
+                  escaped = s.replace('\\', '\\\\').replace('"', '\\"')
+                  return f'"{escaped}"'
+              return s
+
+
+          def patch_line(original_line, leaf_key, new_value):
+              """
+              Replace the scalar value after 'leaf_key:' on a single line.
+              Preserves the original line ending and indentation/key prefix.
+              Returns the new line, or None if the line didn't match.
+              """
+              leaf_str = str(leaf_key)
+              # Match: <indent><key><colon+spaces><old_value><optional_comment>
+              pattern = re.compile(
+                  r'^(\s*' + re.escape(leaf_str) + r'\s*:\s*)([^#\r\n]*)(.*)',
+                  re.DOTALL
+              )
+              line_body = original_line.rstrip('\r\n')
+              m = pattern.match(line_body)
+              if not m:
+                  return None
+              prefix = m.group(1)
+              suffix = m.group(3)  # inline comment if any
+              ending = '\r\n' if original_line.endswith('\r\n') else '\n'
+              new_val_str = scalar_to_str(new_value)
+              # Preserve inline comment with a space separator
+              comment_part = (" " + suffix.strip()) if suffix.strip() else ""
+              return prefix + new_val_str + comment_part + ending
+
+
+          # --------------- main ---------------
 
           file_path = Path("chart/values.yaml")
           changes_path = Path("../ai_output.json")
@@ -285,21 +292,23 @@ jobs:
           source_changes_lookup = {}
           if source_changes_path.exists():
               with source_changes_path.open("r", encoding="utf-8") as f:
-                  source_rows = json.load(f)
-              for r in source_rows:
-                  source_changes_lookup[(r.get("service"), r.get("key"))] = r
+                  for r in json.load(f):
+                      source_changes_lookup[(r.get("service"), r.get("key"))] = r
 
           original_text = file_path.read_text(encoding="utf-8")
-          indent_step = detect_indent_step(original_text)
 
-          yaml = YAML(typ="rt")
-          yaml.preserve_quotes = True
-          yaml.indent(mapping=indent_step, sequence=indent_step, offset=0)
+          # Parse only for structure + line-number info. Never dump back.
+          yaml_parser = YAML(typ="rt")
+          yaml_parser.preserve_quotes = True
+          data = yaml_parser.load(original_text) or {}
 
-          data = yaml.load(original_text) or {}
+          lines = original_text.splitlines(keepends=True)
+          if lines and not lines[-1].endswith('\n'):
+              lines[-1] += '\n'
 
           applied = 0
           skipped = 0
+
           for row in rows:
               service = row.get("service")
               key = row.get("key")
@@ -312,33 +321,27 @@ jobs:
 
               service_section = resolve_service_section(data, service)
               if not service_section:
-                  print(f"Skipping: service section not found for {service}")
+                  print(f"Skipping: no service section found for '{service}'")
                   skipped += 1
                   continue
 
               service_root = data[service_section]
-              rel_key = key
-              service_prefix = f"{service_section}."
-              if rel_key.startswith(service_prefix):
-                  rel_key = rel_key[len(service_prefix):]
 
-              # Also strip canonical prefixes from source repo style keys.
-              canonical_prefixes = [
-                  service_to_section(service) + ".",
-                  service_to_camel(service) + ".",
-              ]
-              for prefix in canonical_prefixes:
+              # Strip any service-prefix from the key.
+              rel_key = key
+              for prefix in (f"{service_section}.", f"{service_to_section(service)}.",
+                             f"{service_to_camel(service)}."):
                   if rel_key.startswith(prefix):
                       rel_key = rel_key[len(prefix):]
                       break
 
               rel_parts = parse_path_parts(rel_key)
-
               if not rel_parts:
-                  print(f"Skipping empty target key for row: {row}")
+                  print(f"Skipping empty path for row: {row}")
                   skipped += 1
                   continue
 
+              # Resolve the exact path inside the service block.
               source_row = source_changes_lookup.get((service, key), {})
               old_value = source_row.get("old_value")
 
@@ -346,48 +349,52 @@ jobs:
               chosen_parts = rel_parts if direct_exists else None
 
               if chosen_parts is None:
-                  candidates = []
-                  for p, current_value in iter_scalar_paths(service_root, []):
-                      if matches_tail(p, rel_parts) or p[-1:] == rel_parts[-1:]:
-                          candidates.append((p, current_value))
-
+                  candidates = [
+                      (p, v) for p, v in iter_scalar_paths(service_root, [])
+                      if matches_tail(p, rel_parts) or p[-1:] == rel_parts[-1:]
+                  ]
                   if old_value is not None:
-                      old_filtered = [c for c in candidates if c[1] == old_value]
-                      if old_filtered:
-                          candidates = old_filtered
-
+                      narrow = [c for c in candidates if c[1] == old_value]
+                      if narrow:
+                          candidates = narrow
                   if len(candidates) == 1:
                       chosen_parts = candidates[0][0]
                   elif len(candidates) > 1:
-                      print(
-                          f"Skipping ambiguous match for {service_section}.{rel_key}: "
-                          f"{len(candidates)} candidate paths"
-                      )
+                      paths_str = ", ".join(".".join(str(x) for x in c[0]) for c in candidates)
+                      print(f"Skipping ambiguous match for {service_section}.{rel_key}: [{paths_str}]")
                       skipped += 1
                       continue
 
               if chosen_parts is None:
-                  print(f"Skipping: no matching path found for {service_section}.{rel_key}")
+                  print(f"Skipping: path not found for {service_section}.{rel_key}")
                   skipped += 1
                   continue
 
-              full_path = [service_section] + chosen_parts
-              if not set_by_path(data, full_path, value):
-                  print(f"Skipping: failed to set path {full_path}")
+              full_parts = [service_section] + chosen_parts
+              line_no = get_value_line(data, full_parts)
+
+              if line_no is None or line_no >= len(lines):
+                  print(f"Skipping: could not locate line for {'.'.join(str(p) for p in full_parts)}")
                   skipped += 1
                   continue
 
-              dotted = ".".join(str(p) for p in full_path)
-              print(f"Updating chart/values.yaml -> {dotted} = {json.dumps(value)}")
+              new_line = patch_line(lines[line_no], full_parts[-1], value)
+              if new_line is None:
+                  print(f"Skipping: line regex did not match for {'.'.join(str(p) for p in full_parts)}")
+                  skipped += 1
+                  continue
+
+              dotted = ".".join(str(p) for p in full_parts)
+              print(f"Patching line {line_no + 1}: {dotted} = {json.dumps(value)}")
+              lines[line_no] = new_line
               applied += 1
 
           if applied > 0:
-              with file_path.open("w", encoding="utf-8") as f:
-                  yaml.dump(data, f)
+              file_path.write_text("".join(lines), encoding="utf-8")
           else:
-              print("No updates were applied; chart/values.yaml was left untouched")
+              print("No updates applied; chart/values.yaml left untouched.")
 
-          print(f"Applied {applied} change(s), skipped {skipped} change(s) in chart/values.yaml")
+          print(f"Applied {applied} change(s), skipped {skipped} change(s).")
           PY
 
           git diff
