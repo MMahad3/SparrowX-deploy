@@ -260,6 +260,17 @@ jobs:
               return path_parts[-len(tail):] == tail
 
 
+          def detect_indent_step(text):
+              for raw in text.splitlines():
+                  line = raw.rstrip("\n")
+                  if not line.strip() or line.lstrip().startswith("#"):
+                      continue
+                  leading = len(line) - len(line.lstrip(" "))
+                  if leading > 0:
+                      return leading
+              return 2
+
+
           file_path = Path("chart/values.yaml")
           changes_path = Path("../ai_output.json")
           source_changes_path = Path("../changes.json")
@@ -278,12 +289,14 @@ jobs:
               for r in source_rows:
                   source_changes_lookup[(r.get("service"), r.get("key"))] = r
 
-          yaml = YAML()
-          yaml.preserve_quotes = True
-          yaml.width = 4096
+          original_text = file_path.read_text(encoding="utf-8")
+          indent_step = detect_indent_step(original_text)
 
-          with file_path.open("r", encoding="utf-8") as f:
-              data = yaml.load(f) or {}
+          yaml = YAML(typ="rt")
+          yaml.preserve_quotes = True
+          yaml.indent(mapping=indent_step, sequence=indent_step, offset=0)
+
+          data = yaml.load(original_text) or {}
 
           applied = 0
           skipped = 0
