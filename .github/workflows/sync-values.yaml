@@ -54,7 +54,7 @@ jobs:
       - name: Checkout Repo B (helm)
         uses: actions/checkout@v4
         with:
-          repository: MMahad3/sparrowx-helm
+          repository: MMahad3/SparrowX-helm
           token: ${{ secrets.GH_TOKEN }}
           path: helm-repo
 
