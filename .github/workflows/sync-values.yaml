@@ -149,6 +149,46 @@ jobs:
               return parts[0] + "".join(p[:1].upper() + p[1:] for p in parts[1:]) + "Service"
 
 
+          def service_to_camel(service):
+              parts = service.split("-")
+              return parts[0] + "".join(p[:1].upper() + p[1:] for p in parts[1:])
+
+
+          def normalize_token(s):
+              return "".join(ch for ch in str(s).lower() if ch.isalnum())
+
+
+          def resolve_service_section(data, service):
+              if not isinstance(data, dict):
+                  return None
+
+              candidates = []
+              camel = service_to_camel(service)
+              candidates.append(service_to_section(service))
+              candidates.append(camel)
+              candidates.append(camel + "Service")
+              candidates.append(service.replace("-", ""))
+              candidates.append(service)
+
+              for c in candidates:
+                  if c in data and isinstance(data[c], (dict, list)):
+                      return c
+
+              normalized_service = normalize_token(service)
+              matches = []
+              for k, v in data.items():
+                  if not isinstance(v, (dict, list)):
+                      continue
+                  nk = normalize_token(k)
+                  if nk == normalized_service or nk.startswith(normalized_service) or normalized_service in nk:
+                      matches.append(k)
+
+              if len(matches) == 1:
+                  return matches[0]
+
+              return None
+
+
           def parse_path_parts(path):
               parts = []
               for p in path.split("."):
@@ -257,9 +297,9 @@ jobs:
                   skipped += 1
                   continue
 
-              service_section = service_to_section(service)
-              if service_section not in data or not isinstance(data[service_section], (dict, list)):
-                  print(f"Skipping: service section not found for {service} ({service_section})")
+              service_section = resolve_service_section(data, service)
+              if not service_section:
+                  print(f"Skipping: service section not found for {service}")
                   skipped += 1
                   continue
 
@@ -268,6 +308,17 @@ jobs:
               service_prefix = f"{service_section}."
               if rel_key.startswith(service_prefix):
                   rel_key = rel_key[len(service_prefix):]
+
+              # Also strip canonical prefixes from source repo style keys.
+              canonical_prefixes = [
+                  service_to_section(service) + ".",
+                  service_to_camel(service) + ".",
+              ]
+              for prefix in canonical_prefixes:
+                  if rel_key.startswith(prefix):
+                      rel_key = rel_key[len(prefix):]
+                      break
+
               rel_parts = parse_path_parts(rel_key)
 
               if not rel_parts:
@@ -317,8 +368,11 @@ jobs:
               print(f"Updating chart/values.yaml -> {dotted} = {json.dumps(value)}")
               applied += 1
 
-          with file_path.open("w", encoding="utf-8") as f:
-              yaml.dump(data, f)
+          if applied > 0:
+              with file_path.open("w", encoding="utf-8") as f:
+                  yaml.dump(data, f)
+          else:
+              print("No updates were applied; chart/values.yaml was left untouched")
 
           print(f"Applied {applied} change(s), skipped {skipped} change(s) in chart/values.yaml")
           PY
