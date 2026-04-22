@@ -50,14 +50,14 @@ jobs:
         run: |
           if [ -z "${{ secrets.GH_TOKEN }}" ]; then
             echo "GH_TOKEN secret is missing or empty."
-            echo "Add GH_TOKEN with repo read/write access to TPSWorldwide/sparrowx-helm in repository or org secrets."
+            echo "Add GH_TOKEN with repo read/write access to MMahad3/sparrowx-helm in repository or org secrets."
             exit 1
           fi
 
       - name: Checkout Repo B (helm)
         uses: actions/checkout@v4
         with:
-          repository: TPSWorldwide/sparrowx-helm
+          repository: MMahad3/sparrowx-helm
           token: ${{ secrets.GH_TOKEN != '' && secrets.GH_TOKEN || github.token }}
           path: helm-repo
 
