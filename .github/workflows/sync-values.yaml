@@ -6,7 +6,7 @@ on:
       - Feature/values-syncing
     paths:
       - '**/values.yaml'
-
+      - '!.github/workflows/**'
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -132,7 +132,18 @@ jobs:
                 \"temperature\": 0
               }")
 
-            echo "$RESPONSE" | jq -r '.choices[0].message.content' > ai_output.json
+            RAW_CONTENT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // "[]"')
+
+            # Normalize possible fenced output and enforce valid JSON array output.
+            CLEAN_CONTENT=$(printf "%s\n" "$RAW_CONTENT" | sed -e '1s/^```json[[:space:]]*$//' -e '1s/^```[[:space:]]*$//' -e '$s/^```[[:space:]]*$//')
+            printf "%s\n" "$CLEAN_CONTENT" > ai_output_raw.json
+
+            if jq -e . ai_output_raw.json >/dev/null 2>&1; then
+              jq -c 'if type == "array" then . else [] end' ai_output_raw.json > ai_output.json
+            else
+              echo "AI output was not valid JSON; using empty array."
+              echo "[]" > ai_output.json
+            fi
           fi
 
           echo "AI OUTPUT:"
@@ -145,16 +156,26 @@ jobs:
         run: |
           cd helm-repo
 
-          jq -c '.[]' ../ai_output.json | while read row; do
-            service=$(echo "$row" | jq -r '.service')
-            key=$(echo "$row" | jq -r '.key')
-            value=$(echo "$row" | jq -r '.value')
+          if ! jq -e 'type == "array"' ../ai_output.json >/dev/null 2>&1; then
+            echo "ai_output.json is not a JSON array. Exiting safely."
+            exit 0
+          fi
+
+          jq -c '.[]?' ../ai_output.json | while IFS= read -r row; do
+            service=$(echo "$row" | jq -r '.service // empty')
+            key=$(echo "$row" | jq -r '.key // empty')
+            value_json=$(echo "$row" | jq -c '.value')
+
+            if [ -z "$service" ] || [ -z "$key" ]; then
+              echo "Skipping invalid row: $row"
+              continue
+            fi
 
             FILE="$service/values.yaml"
 
-            echo "Updating $FILE -> $key = $value"
+            echo "Updating $FILE -> $key = $value_json"
 
-            yq eval ".$key = $value" -i "$FILE"
+            yq eval ".$key = $value_json" -i "$FILE"
           done
 
           git diff
