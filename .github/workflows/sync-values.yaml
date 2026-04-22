@@ -135,71 +135,71 @@ jobs:
             exit 0
           fi
 
-            python3 - <<'PY'
-            import json
-            import sys
-            from pathlib import Path
-            from ruamel.yaml import YAML
+          python3 - <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          from ruamel.yaml import YAML
 
 
-            def service_to_section(service):
+          def service_to_section(service):
               parts = service.split("-")
               return parts[0] + "".join(p[:1].upper() + p[1:] for p in parts[1:]) + "Service"
 
 
-            def set_path(root, path_parts, value):
+          def set_path(root, path_parts, value):
               current = root
               for part in path_parts[:-1]:
-                if part not in current or current[part] is None:
-                  current[part] = {}
-                current = current[part]
+                  if part not in current or current[part] is None:
+                      current[part] = {}
+                  current = current[part]
               current[path_parts[-1]] = value
 
 
-            file_path = Path("chart/values.yaml")
-            changes_path = Path("../ai_output.json")
+          file_path = Path("chart/values.yaml")
+          changes_path = Path("../ai_output.json")
 
-            if not file_path.exists():
+          if not file_path.exists():
               print("Target file not found: chart/values.yaml")
               sys.exit(1)
 
-            with changes_path.open("r", encoding="utf-8") as f:
+          with changes_path.open("r", encoding="utf-8") as f:
               rows = json.load(f)
 
-            yaml = YAML()
-            yaml.preserve_quotes = True
-            yaml.width = 4096
+          yaml = YAML()
+          yaml.preserve_quotes = True
+          yaml.width = 4096
 
-            with file_path.open("r", encoding="utf-8") as f:
+          with file_path.open("r", encoding="utf-8") as f:
               data = yaml.load(f) or {}
 
-            applied = 0
-            for row in rows:
+          applied = 0
+          for row in rows:
               service = row.get("service")
               key = row.get("key")
               value = row.get("value")
 
               if not service or not key:
-                print(f"Skipping invalid row: {row}")
-                continue
+                  print(f"Skipping invalid row: {row}")
+                  continue
 
               service_section = service_to_section(service)
               target_key = key if key.startswith(f"{service_section}.") else f"{service_section}.{key}"
               path_parts = [p for p in target_key.split(".") if p]
 
               if not path_parts:
-                print(f"Skipping empty target key for row: {row}")
-                continue
+                  print(f"Skipping empty target key for row: {row}")
+                  continue
 
               print(f"Updating chart/values.yaml -> {target_key} = {json.dumps(value)}")
               set_path(data, path_parts, value)
               applied += 1
 
-            with file_path.open("w", encoding="utf-8") as f:
+          with file_path.open("w", encoding="utf-8") as f:
               yaml.dump(data, f)
 
-            print(f"Applied {applied} change(s) to chart/values.yaml")
-            PY
+          print(f"Applied {applied} change(s) to chart/values.yaml")
+          PY
 
           git diff
 
