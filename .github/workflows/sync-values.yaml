@@ -87,15 +87,19 @@ jobs:
             # New version
             cp "$FILE_PATH" "$NEW_FILE"
 
-            # Extract keys
-            yq eval 'paths(scalars) | join(".")' "$OLD_FILE" > old_keys.txt
-            yq eval 'paths(scalars) | join(".")' "$NEW_FILE" > new_keys.txt
+            # Convert YAML to JSON once, then use jq for stable path extraction
+            yq eval -o=json '.' "$OLD_FILE" > old.json
+            yq eval -o=json '.' "$NEW_FILE" > new.json
+
+            # Extract scalar key paths
+            jq -r 'paths(scalars) | map(tostring) | join(".")' old.json > old_keys.txt
+            jq -r 'paths(scalars) | map(tostring) | join(".")' new.json > new_keys.txt
 
             cat old_keys.txt new_keys.txt | sort -u > all_keys.txt
 
             while read key; do
-              old_val=$(yq eval ".$key // \"__MISSING__\"" "$OLD_FILE" 2>/dev/null)
-              new_val=$(yq eval ".$key // \"__MISSING__\"" "$NEW_FILE" 2>/dev/null)
+              old_val=$(jq -c --arg key "$key" 'getpath($key | split(".") | map(tonumber? // .)) // "__MISSING__"' old.json)
+              new_val=$(jq -c --arg key "$key" 'getpath($key | split(".") | map(tonumber? // .)) // "__MISSING__"' new.json)
 
               if [ "$old_val" != "$new_val" ]; then
                 echo "Changed: $key | $old_val -> $new_val"
