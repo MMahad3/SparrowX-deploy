@@ -7,7 +7,7 @@ global:
 # Sparrowx cluster-level config: Dapr app IDs and service addresses that
 # services use to discover each other. Stored in `sparrowx-cluster-config`
 # ConfigMap. Values here are the canonical defaults — override via
-# sparrowx-deploy cluster-values if needed.
+# sparrowx-deploy cluster-values if need.
 # ---------------------------------------------------------------------------
 sparrowx:
   appIds:
