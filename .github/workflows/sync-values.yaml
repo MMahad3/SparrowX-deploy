@@ -120,7 +120,7 @@ jobs:
           echo "AI OUTPUT:"
           cat ai_output.json
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           AI_DEBUG: "1"
 
       # =========================

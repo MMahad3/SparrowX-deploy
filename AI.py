@@ -2,7 +2,7 @@ import json
 import os
 import requests
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 AI_DEBUG = os.getenv("AI_DEBUG", "0") == "1"
 
 
@@ -88,43 +88,51 @@ INPUT:
 """
 
     payload = {
-        "model": "gpt-4o-mini",
-        "messages": [
-            {"role": "user", "content": prompt}
+        "contents": [
+            {
+                "parts": [
+                    {"text": prompt}
+                ]
+            }
         ],
-        "temperature": 0
+        "generationConfig": {
+            "temperature": 0
+        }
     }
 
-    log(f"Calling OpenAI API with {len(changes)} change(s)")
+    log(f"Calling Google Gemini API with {len(changes)} change(s)")
 
     try:
         r = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {OPENAI_API_KEY}",
-                "Content-Type": "application/json"
-            },
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+            params={"key": GOOGLE_API_KEY},
+            headers={"Content-Type": "application/json"},
             json=payload,
             timeout=60
         )
     except requests.RequestException as e:
-        log(f"OpenAI request failed: {e}")
+        log(f"Google Gemini request failed: {e}")
         return []
 
-    log(f"OpenAI response status: {r.status_code}")
+    log(f"Google Gemini response status: {r.status_code}")
     if not r.ok:
-        log("OpenAI response was not OK; falling back to empty output")
+        log("Google Gemini response was not OK; falling back to empty output")
         debug(f"Response text (first 1000 chars): {r.text[:1000]}")
         return []
 
     try:
         response_json = r.json()
     except ValueError as e:
-        log(f"OpenAI response is not valid JSON: {e}")
+        log(f"Google Gemini response is not valid JSON: {e}")
         debug(f"Response text (first 1000 chars): {r.text[:1000]}")
         return []
 
-    content = response_json.get("choices", [{}])[0].get("message", {}).get("content", "[]")
+    content = (
+        response_json.get("candidates", [{}])[0]
+        .get("content", {})
+        .get("parts", [{}])[0]
+        .get("text", "[]")
+    )
     debug(f"AI raw message content (first 1000 chars): {str(content)[:1000]}")
 
     parsed = parse_ai_content(content)
@@ -145,7 +153,7 @@ def main():
     log(f"Normalized change rows: {len(normalized_changes)}")
     debug(f"Normalized changes sample: {json.dumps(normalized_changes[:3], ensure_ascii=True)}")
 
-    if OPENAI_API_KEY:
+    if GOOGLE_API_KEY:
         log("Using AI for mapping + replacement decisions")
         output = call_ai(normalized_changes)
 
@@ -154,7 +162,7 @@ def main():
             log("AI output invalid type; falling back to normalized changes")
             output = normalize_changes(changes)
     else:
-        log("OPENAI_API_KEY is missing, using fallback mode")
+        log("GOOGLE_API_KEY is missing, using fallback mode")
         output = fallback(normalized_changes)
 
     with open("ai_output.json", "w") as f:
