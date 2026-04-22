@@ -1,0 +1,21 @@
+# Default empty — all values are injected via $infra/cluster-values.yaml at deploy time.
+# Do not put real values here; edit platform-infra-k8s/cluster-values.yaml instead.
+global:
+  env: {}
+
+# ---------------------------------------------------------------------------
+# Sparrowx cluster-level config: Dapr app IDs and service addresses that
+# services use to discover each other. Stored in `sparrowx-cluster-config`
+# ConfigMap. Values here are the canonical defaults — override via
+# sparrowx-deploy cluster-values if nee.
+# ---------------------------------------------------------------------------
+sparrowx:
+  appIds:
+    CHANNEL_SERVICE_APP_ID: "platform-service-channel"
+    CONFIGURATION_SERVICE_APP_ID: "platform-service-configuration"
+    MESSAGESTORE_SERVICE_APP_ID: "platform-service-message-store"
+    AUDIT_TRAIL_SERVICE_APP_ID: "platform-service-audit-trail"
+    NOTIFICATION_GATEWAY_APP_ID: "platform-service-notification-gateway"
+    USER_MANAGEMENT_SERVICE_APP_ID: "platform-service-user-management"
+    BATCH_SERVICE_APP_ID: "platform-service-batch"
+    BACK_OFFICE_APP_ID: "platform-back-office"
