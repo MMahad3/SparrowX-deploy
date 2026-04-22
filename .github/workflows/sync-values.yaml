@@ -144,11 +144,30 @@ jobs:
               continue
             fi
 
-            FILE="$service/values.yaml"
+            FILE="chart/values.yaml"
 
-            echo "Updating $FILE -> $key = $value_json"
+            if [ ! -f "$FILE" ]; then
+              echo "Target file not found: $FILE"
+              exit 1
+            fi
 
-            yq eval ".$key = $value_json" -i "$FILE"
+            service_section=$(echo "$service" | awk -F'-' '{
+              out=$1;
+              for (i=2; i<=NF; i++) {
+                out=out toupper(substr($i,1,1)) substr($i,2);
+              }
+              printf "%sService", out;
+            }')
+
+            if [[ "$key" == "$service_section."* ]]; then
+              target_key="$key"
+            else
+              target_key="$service_section.$key"
+            fi
+
+            echo "Updating $FILE -> $target_key = $value_json"
+
+            yq eval ".$target_key = $value_json" -i "$FILE"
           done
 
           git diff
