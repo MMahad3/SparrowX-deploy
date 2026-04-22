@@ -3,6 +3,16 @@ import os
 import requests
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+AI_DEBUG = os.getenv("AI_DEBUG", "0") == "1"
+
+
+def log(message):
+    print(f"[AI.py] {message}")
+
+
+def debug(message):
+    if AI_DEBUG:
+        print(f"[AI.py][debug] {message}")
 
 
 def parse_ai_content(raw_content):
@@ -17,7 +27,9 @@ def parse_ai_content(raw_content):
 
     try:
         parsed = json.loads(text)
-    except Exception:
+    except Exception as e:
+        log(f"Failed to parse AI content as JSON array: {e}")
+        debug(f"Raw AI content (first 1000 chars): {text[:1000]}")
         return []
 
     if isinstance(parsed, list):
@@ -75,24 +87,49 @@ INPUT:
 {json.dumps(changes)}
 """
 
-    r = requests.post(
-        "https://api.openai.com/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {OPENAI_API_KEY}",
-            "Content-Type": "application/json"
-        },
-        json={
-            "model": "gpt-4o-mini",
-            "messages": [
-                {"role": "user", "content": prompt}
-            ],
-            "temperature": 0
-        }
-    )
+    payload = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0
+    }
 
-    response_json = r.json()
+    log(f"Calling OpenAI API with {len(changes)} change(s)")
+
+    try:
+        r = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json=payload,
+            timeout=60
+        )
+    except requests.RequestException as e:
+        log(f"OpenAI request failed: {e}")
+        return []
+
+    log(f"OpenAI response status: {r.status_code}")
+    if not r.ok:
+        log("OpenAI response was not OK; falling back to empty output")
+        debug(f"Response text (first 1000 chars): {r.text[:1000]}")
+        return []
+
+    try:
+        response_json = r.json()
+    except ValueError as e:
+        log(f"OpenAI response is not valid JSON: {e}")
+        debug(f"Response text (first 1000 chars): {r.text[:1000]}")
+        return []
+
     content = response_json.get("choices", [{}])[0].get("message", {}).get("content", "[]")
-    return parse_ai_content(content)
+    debug(f"AI raw message content (first 1000 chars): {str(content)[:1000]}")
+
+    parsed = parse_ai_content(content)
+    log(f"Parsed AI output row count: {len(parsed)}")
+    return parsed
 
 
 def fallback(changes):
@@ -104,21 +141,26 @@ def main():
         changes = json.load(f)
 
     normalized_changes = normalize_changes(changes)
+    log(f"Loaded changes.json rows: {len(changes)}")
+    log(f"Normalized change rows: {len(normalized_changes)}")
+    debug(f"Normalized changes sample: {json.dumps(normalized_changes[:3], ensure_ascii=True)}")
 
     if OPENAI_API_KEY:
-        print("Using AI for mapping + replacement decisions")
+        log("Using AI for mapping + replacement decisions")
         output = call_ai(normalized_changes)
 
         # Safety: if AI output is not usable, fallback to normalized input.
         if not isinstance(output, list):
+            log("AI output invalid type; falling back to normalized changes")
             output = normalize_changes(changes)
     else:
-        print("Fallback mode")
+        log("OPENAI_API_KEY is missing, using fallback mode")
         output = fallback(normalized_changes)
 
     with open("ai_output.json", "w") as f:
         json.dump(output, f, indent=2)
 
+    log(f"Wrote ai_output.json with {len(output)} row(s)")
     print(json.dumps(output, indent=2))
 
 

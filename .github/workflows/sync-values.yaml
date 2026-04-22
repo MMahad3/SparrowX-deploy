@@ -115,12 +115,13 @@ jobs:
       # =========================
       - name: AI Transform (with fallback)
         run: |
-          python3 AI.py
+          python3 -u AI.py
 
           echo "AI OUTPUT:"
           cat ai_output.json
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          AI_DEBUG: "1"
 
       # =========================
       # Apply changes safely
