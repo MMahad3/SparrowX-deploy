@@ -6,7 +6,6 @@ on:
       - Feature/values-syncing
     paths:
       - '**/values.yaml'
-      - '!.github/workflows/**'
 
 jobs:
   detect-changes:
@@ -19,38 +18,37 @@ jobs:
           fetch-depth: 0
 
       - name: Get changed files
-        id: changes
         run: |
           echo "Changed files:"
           git diff --name-only ${{ github.event.before }} ${{ github.sha }} > changed.txt
           cat changed.txt
 
       - name: Filter values.yaml files
-        id: filter
         run: |
-          if ! grep -E '/values\.yaml$' changed.txt > values_changed.txt; then
-            : > values_changed.txt
+          grep '/values\.yaml$' changed.txt > values_changed.txt || true
+
+          if [ ! -s values_changed.txt ]; then
+            echo "No values.yaml changes found."
+            exit 0
           fi
+
           echo "VALUES_FILES<<EOF" >> $GITHUB_ENV
           cat values_changed.txt >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
 
-      - name: Debug output
+      - name: Debug changed values files
         run: |
-          echo "Changed values files:"
           echo "$VALUES_FILES"
 
       - name: Extract service names
-        id: extract
         run: |
-          SERVICES=$(printf "%s\n" "$VALUES_FILES" | awk -F'/' 'NF { print $1 }' | sort -u | xargs)
+          SERVICES=$(echo "$VALUES_FILES" | awk -F'/' '{print $(NF-1)}' | sort -u | xargs)
           echo "SERVICES=$SERVICES" >> $GITHUB_ENV
 
       - name: Validate Helm repo token
         run: |
           if [ -z "${{ secrets.GH_TOKEN }}" ]; then
-            echo "GH_TOKEN secret is missing or empty."
-            echo "Add GH_TOKEN with repo read/write access to MMahad3/sparrowx-helm in repository or org secrets."
+            echo "GH_TOKEN is missing"
             exit 1
           fi
 
@@ -58,62 +56,68 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: MMahad3/sparrowx-helm
-          token: ${{ secrets.GH_TOKEN != '' && secrets.GH_TOKEN || github.token }}
+          token: ${{ secrets.GH_TOKEN }}
           path: helm-repo
 
-
-      - name: Show structure
+      - name: Show Repo B structure
         run: |
           ls -R helm-repo
-
-
-      - name: Exit if no values.yaml changed
-        if: env.VALUES_FILES == ''
-        run: |
-          echo "No values.yaml changes detected. Exiting."
-          exit 0
-
-      - name: Debug services
-        run: |
-          echo "Services detected:"
-          echo "$SERVICES"
 
       - name: Install yq
         run: |
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
 
-        
-      - name: Extract YAML changes
+      - name: Extract YAML diff (AI-ready structured output)
         run: |
           echo "Processing services..."
 
-          for service in $SERVICES; do
+          CHANGES_FILE="changes.json"
+          echo "[]" > $CHANGES_FILE
+
+          echo "$SERVICES" | tr ' ' '\n' | while read service; do
             echo "---- Service: $service ----"
 
             FILE_PATH="$service/values.yaml"
 
-            # Get old version
-            git show ${{ github.event.before }}:$FILE_PATH > old.yaml || echo "{}" > old.yaml
+            OLD_FILE="old_${service}.yaml"
+            NEW_FILE="new_${service}.yaml"
+
+            # Get old version safely
+            git show ${{ github.event.before }}:$FILE_PATH > "$OLD_FILE" || echo "" > "$OLD_FILE"
 
             # Get new version
-            cp $FILE_PATH new.yaml
+            cp "$FILE_PATH" "$NEW_FILE"
 
-            echo "Old YAML:"
-            cat old.yaml
-            echo "New YAML:"
-            cat new.yaml
+            # Extract full key paths safely
+            yq eval '.. | select(tag == "!!str" or tag == "!!int" or tag == "!!bool") | path | join(".")' "$OLD_FILE" > old_keys.txt
+            yq eval '.. | select(tag == "!!str" or tag == "!!int" or tag == "!!bool") | path | join(".")' "$NEW_FILE" > new_keys.txt
 
-            # Flatten both YAMLs
-            yq eval '.. | select(tag == "!!str" or tag == "!!int" or tag == "!!bool") | path | join(".")' new.yaml > keys.txt
+            cat old_keys.txt new_keys.txt | sort -u > all_keys.txt
+
             while read key; do
-              old_val=$(yq eval ".$key" old.yaml 2>/dev/null)
-              new_val=$(yq eval ".$key" new.yaml 2>/dev/null)
+              old_val=$(yq eval ".$key // \"__MISSING__\"" "$OLD_FILE" 2>/dev/null)
+              new_val=$(yq eval ".$key // \"__MISSING__\"" "$NEW_FILE" 2>/dev/null)
 
               if [ "$old_val" != "$new_val" ]; then
-                echo "$key | $old_val -> $new_val"
+                echo "Changed: $key | $old_val -> $new_val"
+
+                # Build JSON (AI-ready contract)
+                jq --arg service "$service" \
+                   --arg key "$key" \
+                   --arg old "$old_val" \
+                   --arg new "$new_val" \
+                   '. += [{
+                      service: $service,
+                      key: $key,
+                      old: $old,
+                      new: $new
+                   }]' $CHANGES_FILE > tmp.json && mv tmp.json $CHANGES_FILE
               fi
-            done < keys.txt
+            done < all_keys.txt
 
             echo "--------------------------"
           done
+
+          echo "FINAL DIFF:"
+          cat $CHANGES_FILE
