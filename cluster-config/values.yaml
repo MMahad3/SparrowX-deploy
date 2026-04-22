@@ -18,4 +18,4 @@ sparrowx:
     NOTIFICATION_GATEWAY_APP_ID: "platform-service-notification-gateway"
     USER_MANAGEMENT_SERVICE_APP_ID: "platform-service-user-management"
     BATCH_SERVICE_APP_ID: "platform-service-batch"
-    BACK_OFFICE_APP_ID: "eed21141platform-back-office"
+    BACK_OFFICE_APP_ID: "eed21141platform-back"
