@@ -104,7 +104,7 @@ INPUT:
 
     try:
         r = requests.post(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent",
             params={"key": GOOGLE_API_KEY},
             headers={"Content-Type": "application/json"},
             json=payload,
