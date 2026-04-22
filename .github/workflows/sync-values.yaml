@@ -163,11 +163,17 @@ jobs:
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
 
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "No changes detected. Skipping branch, push, and PR creation."
+            exit 0
+          fi
+
           BRANCH="PLAT/sync-${{ github.sha }}"
           git checkout -b $BRANCH
 
           git add .
-          git commit -m "PLAT: Auto sync from deploy repo" || echo "No changes to commit"
+
+          git commit -m "PLAT: Auto sync from deploy repo"
 
           git push origin $BRANCH
 
