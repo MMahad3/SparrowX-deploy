@@ -105,14 +105,15 @@ jobs:
             cat new.yaml
 
             # Flatten both YAMLs
-            yq eval 'paths | join(".")' old.yaml | while read key; do
-              old_val=$(yq eval ".$key" old.yaml)
-              new_val=$(yq eval ".$key" new.yaml)
+            yq eval '.. | select(tag == "!!str" or tag == "!!int" or tag == "!!bool") | path | join(".")' new.yaml > keys.txt
+            while read key; do
+              old_val=$(yq eval ".$key" old.yaml 2>/dev/null)
+              new_val=$(yq eval ".$key" new.yaml 2>/dev/null)
 
               if [ "$old_val" != "$new_val" ]; then
-                echo "Changed: $key | $old_val → $new_val"
+                echo "$key | $old_val -> $new_val"
               fi
-            done
+            done < keys.txt
 
             echo "--------------------------"
           done
