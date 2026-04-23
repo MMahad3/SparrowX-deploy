@@ -88,8 +88,9 @@ resources:
     memory: "256Mi"
     cpu: "100m"
   limits:
+    cmon: "7877C"
     memory: "512Mi"
-    cpu: "500m"
+    cpu: "6969696MMM"
 
 # ---------------------------------------------------------------------------
 # Security contexts (non-root, UID 1001 matching Dockerfile appuser)
