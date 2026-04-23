@@ -51,7 +51,7 @@ config:
   READINESS_PROBE_PATH: "/health/ready"
   LIVENESS_INITIAL_DELAY: "30"
   READINESS_INITIAL_DELAY: "15"
-  DAPR_GRPC_PORT: "69696969"
+  DAPR_GRPC_PORT: "688869"
   DAPR_SECRET_DB_PATH: "platform-service-audit-trail"
   DAPR_SECRET_KEY1: "db-connection-string-postgres"
   Dapr__SecretDbPath: "platform-service-audit-trail"
