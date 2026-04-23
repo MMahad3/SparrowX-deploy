@@ -314,6 +314,7 @@ jobs:
           # --------------- line-level surgical replacement ---------------
 
           def get_value_line(data, path_parts):
+              """Return the (0-based) line number where the leaf VALUE lives using ruamel lc."""
               cur = data
               for p in path_parts[:-1]:
                   try:
@@ -327,6 +328,31 @@ jobs:
                   else:
                       row, _ = cur.lc.value(leaf)
                   return row
+              except Exception:
+                  return None
+
+          def get_node_line(data, path_parts):
+              """Return the line number (0-based) where the node at path_parts starts (the key line)."""
+              cur = data
+              for p in path_parts[:-1]:
+                  try:
+                      cur = cur[p]
+                  except (KeyError, IndexError, TypeError):
+                      return None
+              leaf = path_parts[-1]
+              try:
+                  if isinstance(cur, dict):
+                      # For a dict, the line of the key is stored in .lc.value(key)
+                      row, _ = cur.lc.value(leaf)
+                      return row
+                  elif isinstance(cur, list):
+                      # For a list, use .lc.item(index)
+                      # leaf is the index (int)
+                      row, _ = cur.lc.item(leaf)
+                      return row
+                  else:
+                      # Should not happen for a node that is a mapping or sequence
+                      return get_value_line(data, path_parts)
               except Exception:
                   return None
 
@@ -366,91 +392,85 @@ jobs:
               return prefix + new_val_str + comment_part + ending
 
 
-          # --------------- INSERT FLAT KEY (case-insensitive section) ---------------
+          # --------------- ADVANCED NESTED INSERTION ---------------
 
-          def insert_nested_key(lines, service_section_key, key_parts, value, separator='.'):
+          def insert_nested_key(lines, data, service_section_key, key_parts, value, separator='.'):
               """
-              Insert a nested key into an existing service section.
-              - If the parent path exists, insert the leaf inside that parent block.
-              - If the parent does not exist, fall back to flat insertion at service level.
+              Insert a key at the correct nesting level.
+              If the parent path exists, insert inside the deepest existing parent.
+              Else, fall back to flat insertion at service level.
               """
               # Find service section start line
               section_re = re.compile(rf'^{re.escape(service_section_key)}:')
               start_idx = None
               for i, line in enumerate(lines):
-                if section_re.match(line.lstrip()):
-                  start_idx = i
-                  break
+                  if section_re.match(line.lstrip()):
+                      start_idx = i
+                      break
               if start_idx is None:
-                print(f"Cannot find service section '{service_section_key}'")
-                return False
+                  print(f"Cannot find service section '{service_section_key}'")
+                  return False
 
               base_indent = len(lines[start_idx]) - len(lines[start_idx].lstrip())
-              child_indent = base_indent + 2
 
-              # If no nesting, just insert as flat key at service level (original behaviour)
+              # Special case: no nesting (single-level key) -> insert as flat key at service level
               if len(key_parts) == 1:
-                return insert_flat_key_at_level(lines, start_idx, base_indent, key_parts[0], value)
+                  return insert_flat_key_at_level(lines, start_idx, base_indent, key_parts[0], value)
 
-              # Find the parent block (e.g., 'dapr:')
-              parent_parts = key_parts[:-1]
-              leaf_part = key_parts[-1]
+              # Find the deepest existing parent in the target data structure
+              full_path_base = [service_section_key]
+              deepest_parent_parts = []
+              parent_line_no = None
 
-              # We'll search for the parent line inside the service section
-              parent_line_idx = None
-              parent_indent = None
-              # The parent must be at indentation level > base_indent (inside service)
-              # We'll scan from start_idx+1 to the end of service section
+              # Check from longest parent downwards
+              for i in range(len(key_parts)-1, 0, -1):
+                  candidate_parts = full_path_base + key_parts[:i]   # e.g., [AuditTrailService, resources, limits]
+                  line_no = get_node_line(data, candidate_parts)
+                  if line_no is not None:
+                      deepest_parent_parts = key_parts[:i]
+                      parent_line_no = line_no
+                      break
+
+              if not deepest_parent_parts:
+                  # No parent found (even the first level doesn't exist) -> fall back to flat key at service level
+                  print(f"No existing parent for '{'.'.join(key_parts)}'. Inserting as flat key.")
+                  return insert_flat_key_at_level(lines, start_idx, base_indent, separator.join(key_parts), value)
+
+              # Now we have the line number where the deepest parent starts (e.g., line of 'limits:')
+              parent_line = lines[parent_line_no]
+              parent_indent = len(parent_line) - len(parent_line.lstrip())
+              child_indent = parent_indent + 2
+
+              # Find the end of the parent block (next line with same or less indentation)
+              end_idx = parent_line_no + 1
+              # Also find the end of the service section to avoid going beyond
               end_section_idx = len(lines)
-              # First, find the end of the service section (next top-level key)
               for i in range(start_idx + 1, len(lines)):
-                line = lines[i]
-                if line.strip() and not line.startswith(' ' * (base_indent + 2)):
-                  end_section_idx = i
-                  break
+                  if lines[i].strip() and not lines[i].startswith(' ' * (base_indent + 2)):
+                      end_section_idx = i
+                      break
+              while end_idx < end_section_idx:
+                  line = lines[end_idx]
+                  if line.strip() and len(line) - len(line.lstrip()) <= parent_indent:
+                      break
+                  end_idx += 1
 
-              for i in range(start_idx + 1, end_section_idx):
-                line = lines[i]
-                # Check if line starts with parent key at correct indentation
-                parent_pattern = re.compile(rf"^{' ' * child_indent}{re.escape(parent_parts[0])}:")
-                if parent_pattern.match(line):
-                  parent_line_idx = i
-                  parent_indent = child_indent
-                  break
-                # Also allow deeper indentation if multiple levels? For now, we only handle one level of nesting.
-                # For deeper paths (e.g., a.b.c), we'd need recursion - but let's keep simple for now.
-
-              if parent_line_idx is None:
-                # Parent does not exist - fall back to flat insertion at service level
-                print(f"Parent '{'.'.join(parent_parts)}' not found. Inserting as flat key.")
-                return insert_flat_key_at_level(lines, start_idx, base_indent, separator.join(key_parts), value)
-
-              # Parent found - now find the end of the parent block
-              parent_end_idx = parent_line_idx + 1
-              while parent_end_idx < end_section_idx:
-                line = lines[parent_end_idx]
-                if line.strip() and not line.startswith(' ' * (parent_indent + 2)):
-                  break
-                parent_end_idx += 1
-
-              # Insert the new leaf inside the parent block
-              leaf_indent = parent_indent + 2
-              new_line = f"{' ' * leaf_indent}{leaf_part}: {scalar_to_str(value)}\n"
-              lines.insert(parent_end_idx, new_line)
-              print(f"Inserted '{leaf_part}' under '{'.'.join(parent_parts)}' in section '{service_section_key}'")
+              # Insert the new leaf key inside this block
+              leaf_part = key_parts[-1]
+              new_line = f"{' ' * child_indent}{leaf_part}: {scalar_to_str(value)}\n"
+              lines.insert(end_idx, new_line)
+              print(f"Inserted '{leaf_part}' under '{'.'.join(deepest_parent_parts)}' in section '{service_section_key}'")
               return True
-
 
           def insert_flat_key_at_level(lines, start_idx, base_indent, flat_key, value):
               """Helper to insert a flat key at the end of the service section."""
-              # Find the end of service section
               child_indent = base_indent + 2
               end_idx = start_idx + 1
               while end_idx < len(lines):
-                line = lines[end_idx]
-                if line.strip() and not line.startswith(' ' * (base_indent + 2)):
-                  break
-                end_idx += 1
+                  line = lines[end_idx]
+                  if line.strip() and not line.startswith(' ' * (base_indent + 2)):
+                      break
+                  end_idx += 1
               flat_key_line = f"{' ' * child_indent}{flat_key}: {scalar_to_str(value)}\n"
               lines.insert(end_idx, flat_key_line)
               print(f"Inserted flat key '{flat_key}' at end of section")
@@ -544,13 +564,13 @@ jobs:
                       continue
 
               if chosen_parts is None:
-                  # Try to insert as a new flat key under the found service section
-                  inserted = insert_nested_key(lines, service_section_key, rel_parts, value, separator='.')
+                  # Try to insert as a new nested key (handles deep parents)
+                  inserted = insert_nested_key(lines, data, service_section_key, rel_parts, value, separator='.')
                   if inserted:
                       applied += 1
                       continue
                   else:
-                      print(f"Skipping: path not found and insertion failed for {service_section_key}.{rel_key}")
+                      print(f"Skipping: path not found and insertion failed for {service_section_key}.{'.'.join(rel_parts)}")
                       skipped += 1
                       continue
 
