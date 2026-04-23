@@ -32,13 +32,13 @@ service:
 # ---------------------------------------------------------------------------
 dapr:
   enabled: true
-  appId: Mahad__MUnir
-  appPort: "673367"
-  environment: dev222
+  appId: Mahad32__MUnir
+  appPort: "67300067"
+  environment: shadybell
   sidecarHttpPort: "3500"
   sidecarGrpcPort: "50001"
   logLevel: info
-  enableApiLogging: "f_test"
+  enableApiLogging: "ajjs-test"
 
 # ---------------------------------------------------------------------------
 # Service-specific ConfigMap  →  platform-service-audit-trail-config
@@ -48,11 +48,11 @@ config:
   APP_VERSION: "1.0.0"
   SERVER_PORT: "8080"
   HEALTH_PORT: "8080"
-  LIVENESS_PROBE_PATH: "CMON"
+  LIVENESS_PROBE_PATH: "CMOyaarN"
   READINESS_PROBE_PATH: "testtest"
   LIVENESS_INITIAL_DELAY: "30"
   READINESS_INITIAL_DELAY: "15"
-  DAPR_GRPC_PORT: "1212"
+  DAPR_GRPC_PORT: "3231212"
   DAPR_SECRET_DB_PATH: "platform-service-audit-trail"
   DAPR_SECRET_KEY1: "db-connection-string-postgres"
   Dapr__SecretDbPath: "platform-service-audit-trail"
