@@ -352,6 +352,58 @@ jobs:
               return prefix + new_val_str + comment_part + ending
 
 
+          # --------------- NEW: insert flat key ---------------
+
+          def insert_flat_key_into_service(lines, service_section, key_parts, value, separator='.'):
+              """
+              Insert a new flat key (e.g., 'redis.host: value') into an existing service section.
+              - lines: list of lines with newline endings
+              - service_section: e.g., "ChannelService"
+              - key_parts: list of path parts, e.g. ['redis', 'host']
+              - value: the new value (already converted to Python scalar)
+              - separator: character to join key parts (default '.')
+              Returns True if success, False otherwise.
+              """
+              # Find the service section start
+              section_re = re.compile(rf'^{re.escape(service_section)}:')
+              start_idx = None
+              for i, line in enumerate(lines):
+                  if section_re.match(line.lstrip()):
+                      start_idx = i
+                      break
+              if start_idx is None:
+                  print(f"Cannot find service section '{service_section}' to insert into")
+                  return False
+
+              # Determine base indentation of the service section
+              base_indent = len(lines[start_idx]) - len(lines[start_idx].lstrip())
+              child_indent = base_indent + 2
+
+              # Find the end of this service section (next top-level key at same or less indent)
+              end_idx = start_idx + 1
+              while end_idx < len(lines):
+                  line = lines[end_idx]
+                  stripped = line.lstrip()
+                  if stripped and not line.startswith(' ' * (base_indent + 2)):
+                      break
+                  end_idx += 1
+
+              # Build the flat key name
+              flat_key = separator.join(str(p) for p in key_parts)
+              # Check if this flat key already exists in the section (to avoid duplicate)
+              pattern = re.compile(rf'^{' ' * child_indent}{re.escape(flat_key)}:')
+              for i in range(start_idx+1, end_idx):
+                  if pattern.match(lines[i]):
+                      print(f"Flat key '{flat_key}' already exists in section '{service_section}'. Skipping insert.")
+                      return False
+
+              # Insert the new line
+              new_line = f"{' ' * child_indent}{flat_key}: {scalar_to_str(value)}\n"
+              lines.insert(end_idx, new_line)
+              print(f"Inserted new flat key '{flat_key}' into section '{service_section}'")
+              return True
+
+
           # --------------- main ---------------
 
           file_path = Path("chart/values.yaml")
@@ -441,11 +493,19 @@ jobs:
                       skipped += 1
                       continue
 
+              # ---------- MODIFIED: if still not found, try to insert as flat key ----------
               if chosen_parts is None:
-                  print(f"Skipping: path not found for {service_section}.{rel_key}")
-                  skipped += 1
-                  continue
+                  # Attempt to insert the new key as a flat key under the service section
+                  inserted = insert_flat_key_into_service(lines, service_section, rel_parts, value, separator='.')
+                  if inserted:
+                      applied += 1
+                      continue
+                  else:
+                      print(f"Skipping: path not found and insertion failed for {service_section}.{rel_key}")
+                      skipped += 1
+                      continue
 
+              # Existing path found – perform line patch
               full_parts = [service_section] + chosen_parts
               line_no = get_value_line(data, full_parts)
 
