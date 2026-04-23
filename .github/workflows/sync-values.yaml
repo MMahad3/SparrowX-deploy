@@ -355,93 +355,93 @@ jobs:
 
           # --------------- INSERT FLAT KEY (case-insensitive section) ---------------
 
-            def insert_nested_key(lines, service_section_key, key_parts, value, separator='.'):
-                """
-                Insert a nested key into an existing service section.
-                - If the parent path exists, insert the leaf inside that parent block.
-                - If the parent does not exist, fall back to flat insertion at service level.
-                """
-                # Find service section start line
-                section_re = re.compile(rf'^{re.escape(service_section_key)}:')
-                start_idx = None
-                for i, line in enumerate(lines):
-                    if section_re.match(line.lstrip()):
-                        start_idx = i
-                        break
-                if start_idx is None:
-                    print(f"Cannot find service section '{service_section_key}'")
-                    return False
+          def insert_nested_key(lines, service_section_key, key_parts, value, separator='.'):
+              """
+              Insert a nested key into an existing service section.
+              - If the parent path exists, insert the leaf inside that parent block.
+              - If the parent does not exist, fall back to flat insertion at service level.
+              """
+              # Find service section start line
+              section_re = re.compile(rf'^{re.escape(service_section_key)}:')
+              start_idx = None
+              for i, line in enumerate(lines):
+                if section_re.match(line.lstrip()):
+                  start_idx = i
+                  break
+              if start_idx is None:
+                print(f"Cannot find service section '{service_section_key}'")
+                return False
 
-                base_indent = len(lines[start_idx]) - len(lines[start_idx].lstrip())
-                child_indent = base_indent + 2
+              base_indent = len(lines[start_idx]) - len(lines[start_idx].lstrip())
+              child_indent = base_indent + 2
 
-                # If no nesting, just insert as flat key at service level (original behaviour)
-                if len(key_parts) == 1:
-                    return insert_flat_key_at_level(lines, start_idx, base_indent, key_parts[0], value)
+              # If no nesting, just insert as flat key at service level (original behaviour)
+              if len(key_parts) == 1:
+                return insert_flat_key_at_level(lines, start_idx, base_indent, key_parts[0], value)
 
-                # Find the parent block (e.g., 'dapr:')
-                parent_parts = key_parts[:-1]
-                leaf_part = key_parts[-1]
+              # Find the parent block (e.g., 'dapr:')
+              parent_parts = key_parts[:-1]
+              leaf_part = key_parts[-1]
 
-                # We'll search for the parent line inside the service section
-                parent_line_idx = None
-                parent_indent = None
-                # The parent must be at indentation level > base_indent (inside service)
-                # We'll scan from start_idx+1 to the end of service section
-                end_section_idx = len(lines)
-                # First, find the end of the service section (next top-level key)
-                for i in range(start_idx+1, len(lines)):
-                    line = lines[i]
-                    if line.strip() and not line.startswith(' ' * (base_indent + 2)):
-                        end_section_idx = i
-                        break
+              # We'll search for the parent line inside the service section
+              parent_line_idx = None
+              parent_indent = None
+              # The parent must be at indentation level > base_indent (inside service)
+              # We'll scan from start_idx+1 to the end of service section
+              end_section_idx = len(lines)
+              # First, find the end of the service section (next top-level key)
+              for i in range(start_idx + 1, len(lines)):
+                line = lines[i]
+                if line.strip() and not line.startswith(' ' * (base_indent + 2)):
+                  end_section_idx = i
+                  break
 
-                for i in range(start_idx+1, end_section_idx):
-                    line = lines[i]
-                    # Check if line starts with parent key at correct indentation
-                    parent_pattern = re.compile(rf'^{' ' * child_indent}{re.escape(parent_parts[0])}:')
-                    if parent_pattern.match(line):
-                        parent_line_idx = i
-                        parent_indent = child_indent
-                        break
-                    # Also allow deeper indentation if multiple levels? For now, we only handle one level of nesting.
-                    # For deeper paths (e.g., a.b.c), we'd need recursion – but let's keep simple for now.
+              for i in range(start_idx + 1, end_section_idx):
+                line = lines[i]
+                # Check if line starts with parent key at correct indentation
+                parent_pattern = re.compile(rf"^{' ' * child_indent}{re.escape(parent_parts[0])}:")
+                if parent_pattern.match(line):
+                  parent_line_idx = i
+                  parent_indent = child_indent
+                  break
+                # Also allow deeper indentation if multiple levels? For now, we only handle one level of nesting.
+                # For deeper paths (e.g., a.b.c), we'd need recursion - but let's keep simple for now.
 
-                if parent_line_idx is None:
-                    # Parent does not exist – fall back to flat insertion at service level
-                    print(f"Parent '{'.'.join(parent_parts)}' not found. Inserting as flat key.")
-                    return insert_flat_key_at_level(lines, start_idx, base_indent, separator.join(key_parts), value)
+              if parent_line_idx is None:
+                # Parent does not exist - fall back to flat insertion at service level
+                print(f"Parent '{'.'.join(parent_parts)}' not found. Inserting as flat key.")
+                return insert_flat_key_at_level(lines, start_idx, base_indent, separator.join(key_parts), value)
 
-                # Parent found – now find the end of the parent block
-                parent_end_idx = parent_line_idx + 1
-                while parent_end_idx < end_section_idx:
-                    line = lines[parent_end_idx]
-                    if line.strip() and not line.startswith(' ' * (parent_indent + 2)):
-                        break
-                    parent_end_idx += 1
+              # Parent found - now find the end of the parent block
+              parent_end_idx = parent_line_idx + 1
+              while parent_end_idx < end_section_idx:
+                line = lines[parent_end_idx]
+                if line.strip() and not line.startswith(' ' * (parent_indent + 2)):
+                  break
+                parent_end_idx += 1
 
-                # Insert the new leaf inside the parent block
-                leaf_indent = parent_indent + 2
-                new_line = f"{' ' * leaf_indent}{leaf_part}: {scalar_to_str(value)}\n"
-                lines.insert(parent_end_idx, new_line)
-                print(f"Inserted '{leaf_part}' under '{'.'.join(parent_parts)}' in section '{service_section_key}'")
-                return True
+              # Insert the new leaf inside the parent block
+              leaf_indent = parent_indent + 2
+              new_line = f"{' ' * leaf_indent}{leaf_part}: {scalar_to_str(value)}\n"
+              lines.insert(parent_end_idx, new_line)
+              print(f"Inserted '{leaf_part}' under '{'.'.join(parent_parts)}' in section '{service_section_key}'")
+              return True
 
 
-            def insert_flat_key_at_level(lines, start_idx, base_indent, flat_key, value):
-                """Helper to insert a flat key at the end of the service section."""
-                # Find the end of service section
-                child_indent = base_indent + 2
-                end_idx = start_idx + 1
-                while end_idx < len(lines):
-                    line = lines[end_idx]
-                    if line.strip() and not line.startswith(' ' * (base_indent + 2)):
-                        break
-                    end_idx += 1
-                flat_key_line = f"{' ' * child_indent}{flat_key}: {scalar_to_str(value)}\n"
-                lines.insert(end_idx, flat_key_line)
-                print(f"Inserted flat key '{flat_key}' at end of section")
-                return True
+          def insert_flat_key_at_level(lines, start_idx, base_indent, flat_key, value):
+              """Helper to insert a flat key at the end of the service section."""
+              # Find the end of service section
+              child_indent = base_indent + 2
+              end_idx = start_idx + 1
+              while end_idx < len(lines):
+                line = lines[end_idx]
+                if line.strip() and not line.startswith(' ' * (base_indent + 2)):
+                  break
+                end_idx += 1
+              flat_key_line = f"{' ' * child_indent}{flat_key}: {scalar_to_str(value)}\n"
+              lines.insert(end_idx, flat_key_line)
+              print(f"Inserted flat key '{flat_key}' at end of section")
+              return True
 
 
           # --------------- MAIN ---------------
