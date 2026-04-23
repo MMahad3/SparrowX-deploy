@@ -33,8 +33,8 @@ service:
 dapr:
   enabled: true
   appId: MahadMUnir
-  appPort: "123"
-  environment: dev
+  appPort: "44434"
+  environment: qa
   sidecarHttpPort: "3500"
   sidecarGrpcPort: "50001"
   logLevel: info
