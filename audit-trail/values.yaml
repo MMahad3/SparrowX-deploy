@@ -34,7 +34,7 @@ dapr:
   enabled: true
   appId: Mahad32__MUnir
   appPort: "67300067"
-  environment: shadybell
+  environment: shadybell2
   sidecarHttpPort: "3500"
   sidecarGrpcPort: "50001"
   logLevel: info
