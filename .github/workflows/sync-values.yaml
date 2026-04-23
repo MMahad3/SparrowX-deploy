@@ -3,7 +3,7 @@ name: Sync values to sparrowx-helm
 on:
   push:
     branches:
-      - Feature/values-adding
+      - main
     paths:
       - '**/values.yaml'
       - '!.github/workflows/**'
