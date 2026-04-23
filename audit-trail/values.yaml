@@ -32,12 +32,12 @@ service:
 # ---------------------------------------------------------------------------
 dapr:
   enabled: true
-  appId: RANARANA
-  appPort: "6969696969"
+  appId: MahadMUnir
+  appPort: "90909090"
   sidecarHttpPort: "3500"
   sidecarGrpcPort: "50001"
   logLevel: info
-  enableApiLogging: "true_test"
+  enableApiLogging: "false_test"
 
 # ---------------------------------------------------------------------------
 # Service-specific ConfigMap  →  platform-service-audit-trail-config
@@ -51,7 +51,7 @@ config:
   READINESS_PROBE_PATH: "/health/ready"
   LIVENESS_INITIAL_DELAY: "30"
   READINESS_INITIAL_DELAY: "15"
-  DAPR_GRPC_PORT: "5555555555555"
+  DAPR_GRPC_PORT: "1212"
   DAPR_SECRET_DB_PATH: "platform-service-audit-trail"
   DAPR_SECRET_KEY1: "db-connection-string-postgres"
   Dapr__SecretDbPath: "platform-service-audit-trail"
