@@ -7,9 +7,12 @@ on:
     paths:
       - '**/values.yaml'
       - '!.github/workflows/**'
+
 jobs:
-  sync:
+  detect-changes:
     runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.extract_services.outputs.services }}
 
     steps:
       # =========================
@@ -42,19 +45,24 @@ jobs:
           echo "EOF" >> $GITHUB_ENV
 
       - name: Extract services
+        id: extract_services
         run: |
           SERVICES=$(echo "$VALUES_FILES" | awk -F'/' '{print $(NF-1)}' | sort -u | xargs)
           echo "SERVICES=$SERVICES" >> $GITHUB_ENV
+          echo "services=$SERVICES" >> $GITHUB_OUTPUT
 
+  extract-diff:
+    runs-on: ubuntu-latest
+    needs: detect-changes
+
+    steps:
       # =========================
-      # Checkout Repo B
+      # Checkout Repo A
       # =========================
-      - name: Checkout Repo B (helm)
+      - name: Checkout Repo A (deploy)
         uses: actions/checkout@v4
         with:
-          repository: MMahad3/SparrowX-helm
-          token: ${{ secrets.GH_TOKEN }}
-          path: helm-repo
+          fetch-depth: 0
 
       # =========================
       # Install tools
@@ -64,12 +72,13 @@ jobs:
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
           sudo apt-get update && sudo apt-get install -y jq
-          python3 -m pip install --upgrade pip requests ruamel.yaml
 
       # =========================
       # Extract diff
       # =========================
       - name: Extract YAML diff
+        env:
+          SERVICES: ${{ needs.detect-changes.outputs.services }}
         run: |
           echo "[]" > changes.json
 
@@ -94,23 +103,52 @@ jobs:
               old_val=$(jq -c --arg key "$key" 'getpath($key | split(".") | map(tonumber? // .)) // "__MISSING__"' old.json)
               new_val=$(jq -c --arg key "$key" 'getpath($key | split(".") | map(tonumber? // .)) // "__MISSING__"' new.json)
 
-                            if [ "$old_val" != "$new_val" ]; then
-                                jq --arg service "$service" \
-                                    --arg key "$key" \
-                                    --arg old "$old_val" \
-                                    --arg new "$new_val" \
-                                    '. += [{
-                                        service: $service,
-                                        key: $key,
-                                        old_value: $old,
-                                        value: $new
-                                    }]' changes.json > tmp.json && mv tmp.json changes.json
-                            fi
+              if [ "$old_val" != "$new_val" ]; then
+                jq --arg service "$service" \
+                  --arg key "$key" \
+                  --arg old "$old_val" \
+                  --arg new "$new_val" \
+                  '. += [{
+                    service: $service,
+                    key: $key,
+                    old_value: $old,
+                    value: $new
+                  }]' changes.json > tmp.json && mv tmp.json changes.json
+              fi
             done < all_keys.txt
           done
 
           echo "CHANGES:"
           cat changes.json
+
+      - name: Upload changes artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: changes-json
+          path: changes.json
+
+  ai-transform:
+    runs-on: ubuntu-latest
+    needs: extract-diff
+
+    steps:
+      # =========================
+      # Checkout Repo A
+      # =========================
+      - name: Checkout Repo A (deploy)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download changes artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: changes-json
+          path: .
+
+      - name: Install Python dependencies
+        run: |
+          python3 -m pip install --upgrade pip requests ruamel.yaml
 
       # =========================
       # AI or fallback
@@ -124,6 +162,44 @@ jobs:
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           AI_DEBUG: "1"
+
+      - name: Upload AI output artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-output-json
+          path: ai_output.json
+
+  apply-and-pr:
+    runs-on: ubuntu-latest
+    needs: ai-transform
+
+    steps:
+      # =========================
+      # Checkout Repo B
+      # =========================
+      - name: Checkout Repo B (helm)
+        uses: actions/checkout@v4
+        with:
+          repository: MMahad3/SparrowX-helm
+          token: ${{ secrets.GH_TOKEN }}
+          path: helm-repo
+
+      - name: Download changes artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: changes-json
+          path: .
+
+      - name: Download AI output artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ai-output-json
+          path: .
+
+      - name: Install tools
+        run: |
+          sudo apt-get update && sudo apt-get install -y jq
+          python3 -m pip install --upgrade pip ruamel.yaml
 
       # =========================
       # Apply changes safely
