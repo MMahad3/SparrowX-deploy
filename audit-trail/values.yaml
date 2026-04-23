@@ -32,13 +32,13 @@ service:
 # ---------------------------------------------------------------------------
 dapr:
   enabled: true
-  appId: MahadMUnir
-  appPort: "6767"
-  environment: dev
+  appId: Mahad__MUnir
+  appPort: "673367"
+  environment: dev222
   sidecarHttpPort: "3500"
   sidecarGrpcPort: "50001"
   logLevel: info
-  enableApiLogging: "false_test"
+  enableApiLogging: "f_test"
 
 # ---------------------------------------------------------------------------
 # Service-specific ConfigMap  →  platform-service-audit-trail-config
@@ -48,8 +48,8 @@ config:
   APP_VERSION: "1.0.0"
   SERVER_PORT: "8080"
   HEALTH_PORT: "8080"
-  LIVENESS_PROBE_PATH: "mahad"
-  READINESS_PROBE_PATH: "testtest3
+  LIVENESS_PROBE_PATH: "CMON"
+  READINESS_PROBE_PATH: "testtest
   LIVENESS_INITIAL_DELAY: "30"
   READINESS_INITIAL_DELAY: "15"
   DAPR_GRPC_PORT: "1212"
