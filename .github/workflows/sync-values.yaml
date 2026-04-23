@@ -11,16 +11,23 @@ on:
 jobs:
   detect-changes:
     runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.extract_services.outputs.services }}
 
     steps:
+      # =========================
+      # Checkout Repo A
+      # =========================
       - name: Checkout Repo A (deploy)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      # =========================
+      # Detect changes
+      # =========================
       - name: Get changed files
         run: |
-          echo "Changed files:"
           git diff --name-only ${{ github.event.before }} ${{ github.sha }} > changed.txt
           cat changed.txt
 
@@ -37,88 +44,463 @@ jobs:
           cat values_changed.txt >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
 
-      - name: Debug changed values files
-        run: |
-          echo "$VALUES_FILES"
-
-      - name: Extract service names
+      - name: Extract services
+        id: extract_services
         run: |
           SERVICES=$(echo "$VALUES_FILES" | awk -F'/' '{print $(NF-1)}' | sort -u | xargs)
           echo "SERVICES=$SERVICES" >> $GITHUB_ENV
+          echo "services=$SERVICES" >> $GITHUB_OUTPUT
 
-      - name: Validate Helm repo token
-        run: |
-          if [ -z "${{ secrets.GH_TOKEN }}" ]; then
-            echo "GH_TOKEN is missing"
-            exit 1
-          fi
+  extract-diff:
+    runs-on: ubuntu-latest
+    needs: detect-changes
 
-      - name: Checkout Repo B (helm)
+    steps:
+      # =========================
+      # Checkout Repo A
+      # =========================
+      - name: Checkout Repo A (deploy)
         uses: actions/checkout@v4
         with:
-          repository: MMahad3/sparrowx-helm
-          token: ${{ secrets.GH_TOKEN }}
-          path: helm-repo
+          fetch-depth: 0
 
-      - name: Show Repo B structure
-        run: |
-          ls -R helm-repo
-
-      - name: Install yq
+      # =========================
+      # Install tools
+      # =========================
+      - name: Install tools
         run: |
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
+          sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Extract YAML diff (AI-ready structured output)
+      # =========================
+      # Extract diff
+      # =========================
+      - name: Extract YAML diff
+        env:
+          SERVICES: ${{ needs.detect-changes.outputs.services }}
         run: |
-          echo "Processing services..."
-
-          CHANGES_FILE="changes.json"
-          echo "[]" > $CHANGES_FILE
+          echo "[]" > changes.json
 
           echo "$SERVICES" | tr ' ' '\n' | while read service; do
-            echo "---- Service: $service ----"
-
             FILE_PATH="$service/values.yaml"
 
             OLD_FILE="old_${service}.yaml"
             NEW_FILE="new_${service}.yaml"
 
-            # Get old version safely
-            git show ${{ github.event.before }}:$FILE_PATH > "$OLD_FILE" || echo "" > "$OLD_FILE"
-
-            # Get new version
+            git show ${{ github.event.before }}:$FILE_PATH > "$OLD_FILE" 2>/dev/null || echo "{}" > "$OLD_FILE"
             cp "$FILE_PATH" "$NEW_FILE"
 
-            # Extract full key paths safely
-            yq eval '.. | select(tag == "!!str" or tag == "!!int" or tag == "!!bool") | path | join(".")' "$OLD_FILE" > old_keys.txt
-            yq eval '.. | select(tag == "!!str" or tag == "!!int" or tag == "!!bool") | path | join(".")' "$NEW_FILE" > new_keys.txt
+            yq eval -o=json '.' "$OLD_FILE" > old.json
+            yq eval -o=json '.' "$NEW_FILE" > new.json
+
+            jq -r 'paths(scalars) | map(tostring) | join(".")' old.json > old_keys.txt
+            jq -r 'paths(scalars) | map(tostring) | join(".")' new.json > new_keys.txt
 
             cat old_keys.txt new_keys.txt | sort -u > all_keys.txt
 
             while read key; do
-              old_val=$(yq eval ".$key // \"__MISSING__\"" "$OLD_FILE" 2>/dev/null)
-              new_val=$(yq eval ".$key // \"__MISSING__\"" "$NEW_FILE" 2>/dev/null)
+              old_val=$(jq -c --arg key "$key" 'getpath($key | split(".") | map(tonumber? // .)) // "__MISSING__"' old.json)
+              new_val=$(jq -c --arg key "$key" 'getpath($key | split(".") | map(tonumber? // .)) // "__MISSING__"' new.json)
 
               if [ "$old_val" != "$new_val" ]; then
-                echo "Changed: $key | $old_val -> $new_val"
-
-                # Build JSON (AI-ready contract)
                 jq --arg service "$service" \
-                   --arg key "$key" \
-                   --arg old "$old_val" \
-                   --arg new "$new_val" \
-                   '. += [{
-                      service: $service,
-                      key: $key,
-                      old: $old,
-                      new: $new
-                   }]' $CHANGES_FILE > tmp.json && mv tmp.json $CHANGES_FILE
+                  --arg key "$key" \
+                  --arg old "$old_val" \
+                  --arg new "$new_val" \
+                  '. += [{
+                    service: $service,
+                    key: $key,
+                    old_value: $old,
+                    value: $new
+                  }]' changes.json > tmp.json && mv tmp.json changes.json
               fi
             done < all_keys.txt
-
-            echo "--------------------------"
           done
 
-          echo "FINAL DIFF:"
-          cat $CHANGES_FILE
+          echo "CHANGES:"
+          cat changes.json
+
+      - name: Upload changes artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: changes-json
+          path: changes.json
+
+  ai-transform:
+    runs-on: ubuntu-latest
+    needs: extract-diff
+
+    steps:
+      # =========================
+      # Checkout Repo A
+      # =========================
+      - name: Checkout Repo A (deploy)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download changes artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: changes-json
+          path: .
+
+      - name: Install Python dependencies
+        run: |
+          python3 -m pip install --upgrade pip requests ruamel.yaml
+
+      # =========================
+      # AI or fallback
+      # =========================
+      - name: AI Transform (with fallback)
+        run: |
+          python3 -u AI.py
+
+          echo "AI OUTPUT:"
+          cat ai_output.json
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          AI_DEBUG: "1"
+
+      - name: Upload AI output artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-output-json
+          path: ai_output.json
+
+  apply-and-pr:
+    runs-on: ubuntu-latest
+    needs: ai-transform
+
+    steps:
+      # =========================
+      # Checkout Repo B
+      # =========================
+      - name: Checkout Repo B (helm)
+        uses: actions/checkout@v4
+        with:
+          repository: MMahad3/SparrowX-helm
+          token: ${{ secrets.GH_TOKEN }}
+          path: helm-repo
+
+      - name: Download changes artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: changes-json
+          path: .
+
+      - name: Download AI output artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ai-output-json
+          path: .
+
+      - name: Install tools
+        run: |
+          sudo apt-get update && sudo apt-get install -y jq
+          python3 -m pip install --upgrade pip ruamel.yaml
+
+      # =========================
+      # Apply changes safely
+      # =========================
+      - name: Apply changes to Helm repo
+        run: |
+          cd helm-repo
+
+          if ! jq -e 'type == "array"' ../ai_output.json >/dev/null 2>&1; then
+            echo "ai_output.json is not a JSON array. Exiting safely."
+            exit 0
+          fi
+
+          python3 - <<'PY'
+          import json
+          import sys
+          import re
+          from pathlib import Path
+          from ruamel.yaml import YAML
+
+
+          # --------------- service section resolution ---------------
+
+          def service_to_section(service):
+              parts = service.split("-")
+              return parts[0] + "".join(p[:1].upper() + p[1:] for p in parts[1:]) + "Service"
+
+
+          def service_to_camel(service):
+              parts = service.split("-")
+              return parts[0] + "".join(p[:1].upper() + p[1:] for p in parts[1:])
+
+
+          def normalize_token(s):
+              return "".join(ch for ch in str(s).lower() if ch.isalnum())
+
+
+          def resolve_service_section(data, service):
+              if not isinstance(data, dict):
+                  return None
+              camel = service_to_camel(service)
+              for c in (service_to_section(service), camel, camel + "Service",
+                        service.replace("-", ""), service):
+                  if c in data and isinstance(data[c], (dict, list)):
+                      return c
+              ns = normalize_token(service)
+              matches = [k for k, v in data.items()
+                         if isinstance(v, (dict, list)) and ns in normalize_token(k)]
+              return matches[0] if len(matches) == 1 else None
+
+
+          # --------------- path helpers ---------------
+
+          def parse_path_parts(path):
+              parts = []
+              for p in path.split("."):
+                  if p:
+                      parts.append(int(p) if p.isdigit() else p)
+              return parts
+
+
+          def get_by_path(root, path_parts):
+              cur = root
+              for p in path_parts:
+                  try:
+                      cur = cur[p]
+                  except (KeyError, IndexError, TypeError):
+                      return False, None
+              return True, cur
+
+
+          def iter_scalar_paths(node, prefix):
+              if isinstance(node, dict):
+                  for k, v in node.items():
+                      yield from iter_scalar_paths(v, prefix + [k])
+              elif isinstance(node, list):
+                  for i, v in enumerate(node):
+                      yield from iter_scalar_paths(v, prefix + [i])
+              else:
+                  yield prefix, node
+
+
+          def matches_tail(path_parts, tail):
+              return bool(tail) and len(path_parts) >= len(tail) and path_parts[-len(tail):] == tail
+
+
+          # --------------- line-level surgical replacement ---------------
+
+          def get_value_line(data, path_parts):
+              """Return the (0-based) line number where the leaf VALUE lives using ruamel lc."""
+              cur = data
+              for p in path_parts[:-1]:
+                  try:
+                      cur = cur[p]
+                  except (KeyError, IndexError, TypeError):
+                      return None
+              leaf = path_parts[-1]
+              try:
+                  if isinstance(cur, list):
+                      row, _ = cur.lc.item(leaf)
+                  else:
+                      row, _ = cur.lc.value(leaf)
+                  return row
+              except Exception:
+                  return None
+
+
+          def scalar_to_str(value):
+              """Serialize a scalar to a safe YAML inline string."""
+              if isinstance(value, bool):
+                  return "true" if value else "false"
+              if isinstance(value, (int, float)):
+                  return str(value)
+              s = str(value)
+              needs_quote = (
+                  not s
+                  or s[0] in ('"', "'", '{', '[', '|', '>', '&', '*', '!', '%', '@', '`')
+                  or ':' in s or '#' in s
+                  or s.lower() in ('true', 'false', 'null', 'yes', 'no', 'on', 'off')
+                  or s != s.strip()
+              )
+              if needs_quote:
+                  escaped = s.replace('\\', '\\\\').replace('"', '\\"')
+                  return f'"{escaped}"'
+              return s
+
+
+          def patch_line(original_line, leaf_key, new_value):
+              """
+              Replace the scalar value after 'leaf_key:' on a single line.
+              Preserves the original line ending and indentation/key prefix.
+              Returns the new line, or None if the line didn't match.
+              """
+              leaf_str = str(leaf_key)
+              # Match: <indent><key><colon+spaces><old_value><optional_comment>
+              pattern = re.compile(
+                  r'^(\s*' + re.escape(leaf_str) + r'\s*:\s*)([^#\r\n]*)(.*)',
+                  re.DOTALL
+              )
+              line_body = original_line.rstrip('\r\n')
+              m = pattern.match(line_body)
+              if not m:
+                  return None
+              prefix = m.group(1)
+              suffix = m.group(3)  # inline comment if any
+              ending = '\r\n' if original_line.endswith('\r\n') else '\n'
+              new_val_str = scalar_to_str(new_value)
+              # Preserve inline comment with a space separator
+              comment_part = (" " + suffix.strip()) if suffix.strip() else ""
+              return prefix + new_val_str + comment_part + ending
+
+
+          # --------------- main ---------------
+
+          file_path = Path("chart/values.yaml")
+          changes_path = Path("../ai_output.json")
+          source_changes_path = Path("../changes.json")
+
+          if not file_path.exists():
+              print("Target file not found: chart/values.yaml")
+              sys.exit(1)
+
+          with changes_path.open("r", encoding="utf-8") as f:
+              rows = json.load(f)
+
+          source_changes_lookup = {}
+          if source_changes_path.exists():
+              with source_changes_path.open("r", encoding="utf-8") as f:
+                  for r in json.load(f):
+                      source_changes_lookup[(r.get("service"), r.get("key"))] = r
+
+          original_text = file_path.read_text(encoding="utf-8")
+
+          # Parse only for structure + line-number info. Never dump back.
+          yaml_parser = YAML(typ="rt")
+          yaml_parser.preserve_quotes = True
+          data = yaml_parser.load(original_text) or {}
+
+          lines = original_text.splitlines(keepends=True)
+          if lines and not lines[-1].endswith('\n'):
+              lines[-1] += '\n'
+
+          applied = 0
+          skipped = 0
+
+          for row in rows:
+              service = row.get("service")
+              key = row.get("key")
+              value = row.get("value")
+
+              if not service or not key:
+                  print(f"Skipping invalid row: {row}")
+                  skipped += 1
+                  continue
+
+              service_section = resolve_service_section(data, service)
+              if not service_section:
+                  print(f"Skipping: no service section found for '{service}'")
+                  skipped += 1
+                  continue
+
+              service_root = data[service_section]
+
+              # Strip any service-prefix from the key.
+              rel_key = key
+              for prefix in (f"{service_section}.", f"{service_to_section(service)}.",
+                             f"{service_to_camel(service)}."):
+                  if rel_key.startswith(prefix):
+                      rel_key = rel_key[len(prefix):]
+                      break
+
+              rel_parts = parse_path_parts(rel_key)
+              if not rel_parts:
+                  print(f"Skipping empty path for row: {row}")
+                  skipped += 1
+                  continue
+
+              # Resolve the exact path inside the service block.
+              source_row = source_changes_lookup.get((service, key), {})
+              old_value = source_row.get("old_value")
+
+              direct_exists, _ = get_by_path(service_root, rel_parts)
+              chosen_parts = rel_parts if direct_exists else None
+
+              if chosen_parts is None:
+                  candidates = [
+                      (p, v) for p, v in iter_scalar_paths(service_root, [])
+                      if matches_tail(p, rel_parts) or p[-1:] == rel_parts[-1:]
+                  ]
+                  if old_value is not None:
+                      narrow = [c for c in candidates if c[1] == old_value]
+                      if narrow:
+                          candidates = narrow
+                  if len(candidates) == 1:
+                      chosen_parts = candidates[0][0]
+                  elif len(candidates) > 1:
+                      paths_str = ", ".join(".".join(str(x) for x in c[0]) for c in candidates)
+                      print(f"Skipping ambiguous match for {service_section}.{rel_key}: [{paths_str}]")
+                      skipped += 1
+                      continue
+
+              if chosen_parts is None:
+                  print(f"Skipping: path not found for {service_section}.{rel_key}")
+                  skipped += 1
+                  continue
+
+              full_parts = [service_section] + chosen_parts
+              line_no = get_value_line(data, full_parts)
+
+              if line_no is None or line_no >= len(lines):
+                  print(f"Skipping: could not locate line for {'.'.join(str(p) for p in full_parts)}")
+                  skipped += 1
+                  continue
+
+              new_line = patch_line(lines[line_no], full_parts[-1], value)
+              if new_line is None:
+                  print(f"Skipping: line regex did not match for {'.'.join(str(p) for p in full_parts)}")
+                  skipped += 1
+                  continue
+
+              dotted = ".".join(str(p) for p in full_parts)
+              print(f"Patching line {line_no + 1}: {dotted} = {json.dumps(value)}")
+              lines[line_no] = new_line
+              applied += 1
+
+          if applied > 0:
+              file_path.write_text("".join(lines), encoding="utf-8")
+          else:
+              print("No updates applied; chart/values.yaml left untouched.")
+
+          print(f"Applied {applied} change(s), skipped {skipped} change(s).")
+          PY
+
+          git diff
+
+      # =========================
+      # Create PR
+      # =========================
+      - name: Create PR
+        run: |
+          cd helm-repo
+
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "No changes detected. Skipping branch, push, and PR creation."
+            exit 0
+          fi
+
+          BRANCH="PLAT/sync-${{ github.sha }}"
+          git checkout -b $BRANCH
+
+          git add .
+
+          git commit -m "PLAT: Auto sync from deploy repo"
+
+          git push origin $BRANCH
+
+          gh pr create \
+            --title "PLAT: Auto Sync deploy to helm" \
+            --body "Automated sync"
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
