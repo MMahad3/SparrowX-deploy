@@ -33,8 +33,8 @@ service:
 dapr:
   enabled: true
   appId: MahadMUnir
-  appPort: "444234"
-  environment: qaw
+  appPort: "6767"
+  environment: dev
   sidecarHttpPort: "3500"
   sidecarGrpcPort: "50001"
   logLevel: info
@@ -49,7 +49,7 @@ config:
   SERVER_PORT: "8080"
   HEALTH_PORT: "8080"
   LIVENESS_PROBE_PATH: "mahad"
-  READINESS_PROBE_PATH: "/health/ready"
+  READINESS_PROBE_PATH: "testtest
   LIVENESS_INITIAL_DELAY: "30"
   READINESS_INITIAL_DELAY: "15"
   DAPR_GRPC_PORT: "1212"
