@@ -87,6 +87,7 @@ resources:
   requests:
     memory: "256Mi"
     cpu: "100m"
+    test22: "test22"
   limits:
     tessstttt: "7877C"
     memory: "512Mi"
