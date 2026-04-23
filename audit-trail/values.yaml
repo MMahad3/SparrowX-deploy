@@ -31,8 +31,8 @@ service:
 # The Dapr operator injects the sidecar based on pod annotations below.
 # ---------------------------------------------------------------------------
 dapr:
-  enabled: mahad_false
-  appId: rana 
+  enabled: troo
+  appId: platform-service-audit-trail_mahad
   appPort: "8080"
   sidecarHttpPort: "3500"
   sidecarGrpcPort: "50001"
