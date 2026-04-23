@@ -3,7 +3,7 @@ name: Sync values to sparrowx-helm
 on:
   push:
     branches:
-      - Feature/values-syncing
+      - Feature/values-adding
     paths:
       - '**/values.yaml'
       - '!.github/workflows/**'
@@ -221,34 +221,49 @@ jobs:
           from ruamel.yaml import YAML
 
 
-          # --------------- service section resolution ---------------
+          # --------------- service section resolution (case-insensitive) ---------------
 
           def service_to_section(service):
               parts = service.split("-")
-              return parts[0] + "".join(p[:1].upper() + p[1:] for p in parts[1:]) + "Service"
-
+              camel = "".join(p.capitalize() for p in parts)
+              return camel + "Service"
 
           def service_to_camel(service):
               parts = service.split("-")
-              return parts[0] + "".join(p[:1].upper() + p[1:] for p in parts[1:])
+              return parts[0] + "".join(p.capitalize() for p in parts[1:])
 
+          def normalize_key(s):
+              """Lowercase and remove non-alphanumeric for case-insensitive matching."""
+              return re.sub(r'[^a-z0-9]', '', s.lower())
 
-          def normalize_token(s):
-              return "".join(ch for ch in str(s).lower() if ch.isalnum())
-
-
-          def resolve_service_section(data, service):
+          def resolve_service_section_key(data, service):
+              """
+              Case-insensitively find the service section key in the data dict.
+              Returns the original key name (e.g., 'ChannelService') or None.
+              """
               if not isinstance(data, dict):
                   return None
-              camel = service_to_camel(service)
-              for c in (service_to_section(service), camel, camel + "Service",
-                        service.replace("-", ""), service):
-                  if c in data and isinstance(data[c], (dict, list)):
-                      return c
-              ns = normalize_token(service)
-              matches = [k for k, v in data.items()
-                         if isinstance(v, (dict, list)) and ns in normalize_token(k)]
-              return matches[0] if len(matches) == 1 else None
+              target_norm = normalize_key(service)
+              # Possible variations: with/without "Service", camelCase, etc.
+              candidates = [
+                  service,
+                  service_to_section(service),
+                  service_to_camel(service),
+                  service_to_camel(service) + "Service",
+                  service.replace("-", ""),
+                  service.replace("-", "") + "service",
+              ]
+              # Exact match first
+              for candidate in candidates:
+                  if candidate in data:
+                      return candidate
+              # Case-insensitive scan through all keys
+              for key in data.keys():
+                  if normalize_key(key) == target_norm:
+                      return key
+                  if normalize_key(key) == normalize_key(service + "Service"):
+                      return key
+              return None
 
 
           # --------------- path helpers ---------------
@@ -260,7 +275,6 @@ jobs:
                       parts.append(int(p) if p.isdigit() else p)
               return parts
 
-
           def get_by_path(root, path_parts):
               cur = root
               for p in path_parts:
@@ -269,7 +283,6 @@ jobs:
                   except (KeyError, IndexError, TypeError):
                       return False, None
               return True, cur
-
 
           def iter_scalar_paths(node, prefix):
               if isinstance(node, dict):
@@ -281,7 +294,6 @@ jobs:
               else:
                   yield prefix, node
 
-
           def matches_tail(path_parts, tail):
               return bool(tail) and len(path_parts) >= len(tail) and path_parts[-len(tail):] == tail
 
@@ -289,7 +301,6 @@ jobs:
           # --------------- line-level surgical replacement ---------------
 
           def get_value_line(data, path_parts):
-              """Return the (0-based) line number where the leaf VALUE lives using ruamel lc."""
               cur = data
               for p in path_parts[:-1]:
                   try:
@@ -306,9 +317,7 @@ jobs:
               except Exception:
                   return None
 
-
           def scalar_to_str(value):
-              """Serialize a scalar to a safe YAML inline string."""
               if isinstance(value, bool):
                   return "true" if value else "false"
               if isinstance(value, (int, float)):
@@ -326,15 +335,8 @@ jobs:
                   return f'"{escaped}"'
               return s
 
-
           def patch_line(original_line, leaf_key, new_value):
-              """
-              Replace the scalar value after 'leaf_key:' on a single line.
-              Preserves the original line ending and indentation/key prefix.
-              Returns the new line, or None if the line didn't match.
-              """
               leaf_str = str(leaf_key)
-              # Match: <indent><key><colon+spaces><old_value><optional_comment>
               pattern = re.compile(
                   r'^(\s*' + re.escape(leaf_str) + r'\s*:\s*)([^#\r\n]*)(.*)',
                   re.DOTALL
@@ -344,15 +346,55 @@ jobs:
               if not m:
                   return None
               prefix = m.group(1)
-              suffix = m.group(3)  # inline comment if any
+              suffix = m.group(3)
               ending = '\r\n' if original_line.endswith('\r\n') else '\n'
               new_val_str = scalar_to_str(new_value)
-              # Preserve inline comment with a space separator
               comment_part = (" " + suffix.strip()) if suffix.strip() else ""
               return prefix + new_val_str + comment_part + ending
 
 
-          # --------------- main ---------------
+          # --------------- INSERT FLAT KEY (case-insensitive section) ---------------
+
+          def insert_flat_key_into_service(lines, service_section_key, key_parts, value, separator='.'):
+              """
+              Insert a new flat key under the service section using the exact key name.
+              service_section_key: the exact key string as it appears in the YAML (e.g., 'ChannelService')
+              """
+              section_re = re.compile(rf'^{re.escape(service_section_key)}:')
+              start_idx = None
+              for i, line in enumerate(lines):
+                  if section_re.match(line.lstrip()):
+                      start_idx = i
+                      break
+              if start_idx is None:
+                  print(f"Cannot find service section '{service_section_key}' to insert into")
+                  return False
+
+              base_indent = len(lines[start_idx]) - len(lines[start_idx].lstrip())
+              child_indent = base_indent + 2
+
+              end_idx = start_idx + 1
+              while end_idx < len(lines):
+                  line = lines[end_idx]
+                  stripped = line.lstrip()
+                  if stripped and not line.startswith(' ' * (base_indent + 2)):
+                      break
+                  end_idx += 1
+
+              flat_key = separator.join(str(p) for p in key_parts)
+              pattern = re.compile(rf'^{' ' * child_indent}{re.escape(flat_key)}:')
+              for i in range(start_idx+1, end_idx):
+                  if pattern.match(lines[i]):
+                      print(f"Flat key '{flat_key}' already exists in section '{service_section_key}'. Skipping insert.")
+                      return False
+
+              new_line = f"{' ' * child_indent}{flat_key}: {scalar_to_str(value)}\n"
+              lines.insert(end_idx, new_line)
+              print(f"Inserted new flat key '{flat_key}' into section '{service_section_key}'")
+              return True
+
+
+          # --------------- MAIN ---------------
 
           file_path = Path("chart/values.yaml")
           changes_path = Path("../ai_output.json")
@@ -372,8 +414,6 @@ jobs:
                       source_changes_lookup[(r.get("service"), r.get("key"))] = r
 
           original_text = file_path.read_text(encoding="utf-8")
-
-          # Parse only for structure + line-number info. Never dump back.
           yaml_parser = YAML(typ="rt")
           yaml_parser.preserve_quotes = True
           data = yaml_parser.load(original_text) or {}
@@ -395,17 +435,17 @@ jobs:
                   skipped += 1
                   continue
 
-              service_section = resolve_service_section(data, service)
-              if not service_section:
-                  print(f"Skipping: no service section found for '{service}'")
+              service_section_key = resolve_service_section_key(data, service)
+              if not service_section_key:
+                  print(f"Skipping: no service section found for '{service}' (case-insensitive)")
                   skipped += 1
                   continue
 
-              service_root = data[service_section]
+              service_root = data[service_section_key]
 
               # Strip any service-prefix from the key.
               rel_key = key
-              for prefix in (f"{service_section}.", f"{service_to_section(service)}.",
+              for prefix in (f"{service_section_key}.", f"{service_to_section(service)}.",
                              f"{service_to_camel(service)}."):
                   if rel_key.startswith(prefix):
                       rel_key = rel_key[len(prefix):]
@@ -417,7 +457,6 @@ jobs:
                   skipped += 1
                   continue
 
-              # Resolve the exact path inside the service block.
               source_row = source_changes_lookup.get((service, key), {})
               old_value = source_row.get("old_value")
 
@@ -437,16 +476,22 @@ jobs:
                       chosen_parts = candidates[0][0]
                   elif len(candidates) > 1:
                       paths_str = ", ".join(".".join(str(x) for x in c[0]) for c in candidates)
-                      print(f"Skipping ambiguous match for {service_section}.{rel_key}: [{paths_str}]")
+                      print(f"Skipping ambiguous match for {service_section_key}.{rel_key}: [{paths_str}]")
                       skipped += 1
                       continue
 
               if chosen_parts is None:
-                  print(f"Skipping: path not found for {service_section}.{rel_key}")
-                  skipped += 1
-                  continue
+                  # Try to insert as a new flat key under the found service section
+                  inserted = insert_flat_key_into_service(lines, service_section_key, rel_parts, value, separator='.')
+                  if inserted:
+                      applied += 1
+                      continue
+                  else:
+                      print(f"Skipping: path not found and insertion failed for {service_section_key}.{rel_key}")
+                      skipped += 1
+                      continue
 
-              full_parts = [service_section] + chosen_parts
+              full_parts = [service_section_key] + chosen_parts
               line_no = get_value_line(data, full_parts)
 
               if line_no is None or line_no >= len(lines):

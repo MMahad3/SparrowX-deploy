@@ -31,9 +31,9 @@ service:
 # The Dapr operator injects the sidecar based on pod annotations below.
 # ---------------------------------------------------------------------------
 dapr:
-  enabled: troo
-  appId: platform-service-audit-trail_mahad
-  appPort: "8080"
+  enabled: true
+  appId: RANARANA
+  appPort: "6969696969"
   sidecarHttpPort: "3500"
   sidecarGrpcPort: "50001"
   logLevel: info
@@ -51,7 +51,7 @@ config:
   READINESS_PROBE_PATH: "/health/ready"
   LIVENESS_INITIAL_DELAY: "30"
   READINESS_INITIAL_DELAY: "15"
-  DAPR_GRPC_PORT: "69696969"
+  DAPR_GRPC_PORT: "5555555555555"
   DAPR_SECRET_DB_PATH: "platform-service-audit-trail"
   DAPR_SECRET_KEY1: "db-connection-string-postgres"
   Dapr__SecretDbPath: "platform-service-audit-trail"
