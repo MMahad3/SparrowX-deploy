@@ -82,7 +82,20 @@ jobs:
         run: |
           echo "[]" > changes.json
 
-          echo "$SERVICES" | tr ' ' '\n' | while read service; do
+          safe_yq_to_json() {
+            local input_file="$1"
+            local output_file="$2"
+
+            # If YAML is malformed in either old or new file, continue with empty object.
+            if ! yq eval -o=json '.' "$input_file" > "$output_file" 2>/dev/null; then
+              echo "Warning: could not parse $input_file as YAML; defaulting to {}"
+              echo "{}" > "$output_file"
+            fi
+          }
+
+          echo "$SERVICES" | tr ' ' '\n' | while IFS= read -r service; do
+            [ -z "$service" ] && continue
+
             FILE_PATH="$service/values.yaml"
 
             OLD_FILE="old_${service}.yaml"
@@ -91,15 +104,15 @@ jobs:
             git show ${{ github.event.before }}:$FILE_PATH > "$OLD_FILE" 2>/dev/null || echo "{}" > "$OLD_FILE"
             cp "$FILE_PATH" "$NEW_FILE"
 
-            yq eval -o=json '.' "$OLD_FILE" > old.json
-            yq eval -o=json '.' "$NEW_FILE" > new.json
+            safe_yq_to_json "$OLD_FILE" old.json
+            safe_yq_to_json "$NEW_FILE" new.json
 
             jq -r 'paths(scalars) | map(tostring) | join(".")' old.json > old_keys.txt
             jq -r 'paths(scalars) | map(tostring) | join(".")' new.json > new_keys.txt
 
             cat old_keys.txt new_keys.txt | sort -u > all_keys.txt
 
-            while read key; do
+            while IFS= read -r key; do
               old_val=$(jq -c --arg key "$key" 'getpath($key | split(".") | map(tonumber? // .)) // "__MISSING__"' old.json)
               new_val=$(jq -c --arg key "$key" 'getpath($key | split(".") | map(tonumber? // .)) // "__MISSING__"' new.json)
 
