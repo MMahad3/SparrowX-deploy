@@ -88,7 +88,7 @@ resources:
     memory: "256Mi"
     cpu: "100m"
   limits:
-    cmon: "7877C"
+    tessstttt: "7877C"
     memory: "512Mi"
     cpu: "6969696MMM"
 
