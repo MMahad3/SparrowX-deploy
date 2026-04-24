@@ -38,12 +38,12 @@ dapr:
 # Source: deploy/.env.prod
 # ---------------------------------------------------------------------------
 config:
-  GITHUB_USERNAME: "YOUR_GITHUB_USERNAME"
-  GITHUB_TOKEN: "YOUR_PERSONAL_ACCESS_TOKEN"
-  NETWORK_NAME: "platform-network"
-  SSL_HTTP_PORT: "8080"
-  SSL_HTTPS_PORT: "8443"
-  CERT_ENV: "Bwlackflag"
+  GITHUB_USERNAME: "Mahad"
+  GITHUB_TOKEN: "12344444"
+  NETWORK_NAME: "TPS-network"
+  SSL_HTTP_PORT: "799"
+  SSL_HTTPS_PORT: "443"
+  CERT_ENV: "TEST"
   DAPR_HTTP_PORT: "3500"
   DAPR_GRPC_PORT: "1119876"
   DAPR_METRICS_PORT: "9091"
@@ -54,7 +54,7 @@ config:
   DAPR_SECRET_KEY3: "db-password-postgres"
   Dapr__SecretDbPath: "platform-service-channel"
   Dapr__SecretKeyConnectionString: "db-connection-string-postgres"
-  Dapr__SecretKeyUsername: "db-username-postgres"
+  Dapr__SecretKeyUsername: "db-Tps-postgres"
   Dapr__SecretKeyPassword: "db-password-postgres"
   DB_HOST: "postgresql"
   REDIS_HOST: "redis"
