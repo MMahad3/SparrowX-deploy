@@ -9,7 +9,7 @@ image:
   repository: devopstps/platform-service-audit-trail
   pullPolicy: IfNotPresent
   # Override with image digest or tag at deploy time, e.g. --set image.tag=sha-abc123
-  tag: "v6.7.6.7.6.7.6"
+  tag: "v1.1.1.1.1.1"
 
 nameOverride: ""
 fullnameOverride: ""
@@ -35,10 +35,11 @@ dapr:
   appId: Mahad77__MUnir
   appPort: "6007300067"
   environment: shadybell21899
-  sidecarHttpPort: "3500"
-  sidecarGrpcPort: "50001"
+  sidecarHttpPort: "ranrananranarana"
+  sidecarGrpcPort: "5000000000"
   logLevel: info
   enableApiLogging: "real-test"
+  key: mahad
 
 # ---------------------------------------------------------------------------
 # Service-specific ConfigMap  →  platform-service-audit-trail-config
