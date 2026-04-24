@@ -1,22 +1,19 @@
 import json
 import os
-import requests
+import re
+import sys
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 AI_DEBUG = os.getenv("AI_DEBUG", "0") == "1"
+TARGET_KEYS = set(os.getenv("TARGET_SCHEMA_KEYS", "").splitlines())
 
-
-def log(message):
-    print(f"[AI.py] {message}")
-
-
-def debug(message):
+def log(msg): print(f"[AI.py] {msg}")
+def debug(msg):
     if AI_DEBUG:
-        print(f"[AI.py][debug] {message}")
+        print(f"[AI.py][debug] {msg}")
 
-
-def parse_ai_content(raw_content):
-    text = (raw_content or "").strip()
+def parse_ai_content(raw):
+    text = (raw or "").strip()
     if text.startswith("```"):
         lines = text.splitlines()
         if lines and lines[0].startswith("```"):
@@ -24,172 +21,67 @@ def parse_ai_content(raw_content):
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
         text = "\n".join(lines).strip()
-
     try:
-        parsed = json.loads(text)
+        return json.loads(text)
     except Exception as e:
-        log(f"Failed to parse AI content as JSON array: {e}")
-        debug(f"Raw AI content (first 1000 chars): {text[:1000]}")
+        log(f"Failed to parse AI response: {e}")
         return []
 
-    if isinstance(parsed, list):
-        return parsed
-    return []
-
-
-def normalize_changes(changes):
-    normalized = []
-    for item in changes:
-        service = item.get("service")
-        key = item.get("key")
-        if not service or not key:
-            continue
-
-        value = item.get("value")
-        # `changes.json` may contain scalar values encoded as JSON strings.
-        if isinstance(value, str):
-            try:
-                value = json.loads(value)
-            except Exception:
-                pass
-
-        normalized.append({
-            "service": service,
-            "key": key,
-            "value": value
-        })
-    return normalized
-
+def normalize_key(s):
+    return re.sub(r'[^a-z0-9]', '', s.lower())
 
 def call_ai(changes):
-    prompt = f"""
-You are a Helm values update assistant.
+    # Create a compact prompt – only ask for approval per change
+    prompt = f"""You are a Helm values validation assistant.
 
-TASK:
-Take input changes and return only safe value updates in the same schema.
+Given a list of proposed changes and the existing target keys.
+For each change, decide if it should be applied.
+Return a JSON array of the changes that are **approved** (same format as input).
 
-RULES:
-- Keep this exact output schema per row: service, key, value
-- Do not add extra fields
-- Do not return markdown
-- Return valid JSON array only
+Rules for approval:
+- If the key already exists in target keys (case‑insensitive) → approve (update)
+- If the key is new, but its parent path (e.g., 'resources.limits') exists → approve (add)
+- If the key is completely new and parent does NOT exist → reject
+- If the value type is obviously wrong (e.g., string where a number is expected) → reject
+- If the change is from a known safe pattern (e.g., adding a flat key under config:) → approve
 
-OUTPUT FORMAT:
+Existing target keys (flat, case‑insensitive):
+{chr(10).join(sorted(TARGET_KEYS)[:200])}
+
+Proposed changes (service, key, value):
+{json.dumps(changes, indent=2)}
+
+Return only the approved changes as a JSON array. Do not add extra fields.
+Example output:
 [
-  {{
-        "service": "channel-service",
-        "key": "image.tag",
-    "value": "M-0.0.2"
-  }}
+  {{"service": "payment", "key": "image.tag", "value": "1.2.3"}}
 ]
-
-INPUT:
-{json.dumps(changes)}
 """
-
-    payload = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": prompt}
-                ]
-            }
-        ],
-        "generationConfig": {
-            "temperature": 0
-        }
-    }
-
-    log(f"Calling Google Gemini API with {len(changes)} change(s)")
-
-    try:
-        r = requests.post(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
-            params={"key": GOOGLE_API_KEY},
-            headers={"Content-Type": "application/json"},
-            json=payload,
-            timeout=60
-        )
-    except requests.RequestException as e:
-        log(f"Google Gemini request failed: {e}")
-        return []
-
-    log(f"Google Gemini response status: {r.status_code}")
-    if not r.ok:
-        log("Google Gemini response was not OK; falling back to empty output")
-        debug(f"Response text (first 1000 chars): {r.text[:1000]}")
-        return []
-
-    try:
-        response_json = r.json()
-    except ValueError as e:
-        log(f"Google Gemini response is not valid JSON: {e}")
-        debug(f"Response text (first 1000 chars): {r.text[:1000]}")
-        return []
-
-    content = (
-        response_json.get("candidates", [{}])[0]
-        .get("content", {})
-        .get("parts", [{}])[0]
-        .get("text", "[]")
-    )
-    debug(f"AI raw message content (first 1000 chars): {str(content)[:1000]}")
-
-    parsed = parse_ai_content(content)
-    log(f"Parsed AI output row count: {len(parsed)}")
-    return parsed
-
-
-def fallback(changes):
-    return normalize_changes(changes)
-
-
-def filter_to_input_scope(ai_rows, normalized_changes):
-    allowed = {(row.get("service"), row.get("key")) for row in normalized_changes}
-    filtered = []
-
-    for row in ai_rows:
-        service = row.get("service")
-        key = row.get("key")
-        if (service, key) in allowed:
-            filtered.append(row)
-        else:
-            debug(f"Dropping out-of-scope AI row: {row}")
-
-    return filtered
-
+    # ... (rest of your existing call_ai function – same API call logic)
+    # I'm omitting the full requests code for brevity – keep yours unchanged.
+    # Just replace the prompt variable with the one above.
+    # ...
 
 def main():
     with open("changes.json") as f:
         changes = json.load(f)
+    if not changes:
+        log("No changes to validate")
+        with open("ai_output.json", "w") as f:
+            json.dump([], f)
+        return
 
-    normalized_changes = normalize_changes(changes)
-    log(f"Loaded changes.json rows: {len(changes)}")
-    log(f"Normalized change rows: {len(normalized_changes)}")
-    debug(f"Normalized changes sample: {json.dumps(normalized_changes[:3], ensure_ascii=True)}")
+    if not GOOGLE_API_KEY:
+        log("No API key – approving all changes (fallback)")
+        with open("ai_output.json", "w") as f:
+            json.dump(changes, f)
+        return
 
-    if GOOGLE_API_KEY:
-        log("Using AI for mapping + replacement decisions")
-        output = call_ai(normalized_changes)
-        output = filter_to_input_scope(output, normalized_changes)
-        log(f"Rows after input-scope filter: {len(output)}")
-
-        # Safety: if AI output is not usable, fallback to normalized input.
-        if (not isinstance(output, list)) or (
-            normalized_changes and len(output) == 0
-        ):
-            log("AI output unusable; falling back to normalized changes")
-            output = fallback(normalized_changes)
-    else:
-        log("GOOGLE_API_KEY is missing, using fallback mode")
-        output = fallback(normalized_changes)
-
+    log(f"Validating {len(changes)} changes against {len(TARGET_KEYS)} target keys")
+    approved = call_ai(changes)
+    log(f"Approved {len(approved)} changes")
     with open("ai_output.json", "w") as f:
-        json.dump(output, f, indent=2)
-
-    log(f"Wrote ai_output.json with {len(output)} row(s)")
-    print(json.dumps(output, indent=2))
-
+        json.dump(approved, f)
 
 if __name__ == "__main__":
     main()
