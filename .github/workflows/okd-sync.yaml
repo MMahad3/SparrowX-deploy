@@ -479,127 +479,226 @@ jobs:
 
           # --------------- MAIN ---------------
 
-          file_path = Path("environment/qa-okd-values.yaml")
+          file_paths = [
+              Path("environment/qa-okd-values.yaml"),
+              Path("environment/dev-eks-values.yaml"),
+          ]
+
           changes_path = Path("../ai_output.json")
           source_changes_path = Path("../changes.json")
-
-          if not file_path.exists():
-              print("Target file not found: environment/qa-okd-values.yaml")
-              sys.exit(1)
-
+          
+          # Load changes once
           with changes_path.open("r", encoding="utf-8") as f:
               rows = json.load(f)
-
+          
           source_changes_lookup = {}
           if source_changes_path.exists():
               with source_changes_path.open("r", encoding="utf-8") as f:
                   for r in json.load(f):
                       source_changes_lookup[(r.get("service"), r.get("key"))] = r
-
-          original_text = file_path.read_text(encoding="utf-8")
+          
           yaml_parser = YAML(typ="rt")
           yaml_parser.preserve_quotes = True
-          data = yaml_parser.load(original_text) or {}
-
-          lines = original_text.splitlines(keepends=True)
-          if lines and not lines[-1].endswith('\n'):
-              lines[-1] += '\n'
-
-          applied = 0
-          skipped = 0
-
-          for row in rows:
-              service = row.get("service")
-              key = row.get("key")
-              value = row.get("value")
-
-              if not service or not key:
-                  print(f"Skipping invalid row: {row}")
-                  skipped += 1
+          
+          # 🔁 LOOP THROUGH FILES
+          for file_path in file_paths:
+          
+              if not file_path.exists():
+                  print(f"Skipping missing file: {file_path}")
                   continue
-
-              service_section_key = resolve_service_section_key(data, service)
-              if not service_section_key:
-                  print(f"Skipping: no service section found for '{service}' (case-insensitive)")
-                  skipped += 1
-                  continue
-
-              service_root = data[service_section_key]
-
-              # Strip any service-prefix from the key.
-              rel_key = key
-              for prefix in (f"{service_section_key}.", f"{service_to_section(service)}.",
-                             f"{service_to_camel(service)}."):
-                  if rel_key.startswith(prefix):
-                      rel_key = rel_key[len(prefix):]
-                      break
-
-              rel_parts = parse_path_parts(rel_key)
-              if not rel_parts:
-                  print(f"Skipping empty path for row: {row}")
-                  skipped += 1
-                  continue
-
-              source_row = source_changes_lookup.get((service, key), {})
-              old_value = source_row.get("old_value")
-
-              direct_exists, _ = get_by_path(service_root, rel_parts)
-              chosen_parts = rel_parts if direct_exists else None
-
-              if chosen_parts is None:
-                  candidates = [
-                      (p, v) for p, v in iter_scalar_paths(service_root, [])
-                      if matches_tail(p, rel_parts) or p[-1:] == rel_parts[-1:]
-                  ]
-                  if old_value is not None:
-                      narrow = [c for c in candidates if c[1] == old_value]
-                      if narrow:
-                          candidates = narrow
-                  if len(candidates) == 1:
-                      chosen_parts = candidates[0][0]
-                  elif len(candidates) > 1:
-                      paths_str = ", ".join(".".join(str(x) for x in c[0]) for c in candidates)
-                      print(f"Skipping ambiguous match for {service_section_key}.{rel_key}: [{paths_str}]")
+          
+              print(f"\nProcessing file: {file_path}")
+          
+              original_text = file_path.read_text(encoding="utf-8")
+              data = yaml_parser.load(original_text) or {}
+          
+              lines = original_text.splitlines(keepends=True)
+              if lines and not lines[-1].endswith('\n'):
+                  lines[-1] += '\n'
+          
+              applied = 0
+              skipped = 0
+          
+              for row in rows:
+                  service = row.get("service")
+                  key = row.get("key")
+                  value = row.get("value")
+          
+                  if not service or not key:
+                      print(f"Skipping invalid row: {row}")
                       skipped += 1
                       continue
-
-              if chosen_parts is None:
-                  # Try to insert as a new nested key (handles deep parents)
-                  inserted = insert_nested_key(lines, data, service_section_key, rel_parts, value, separator='.')
-                  if inserted:
-                      applied += 1
-                      continue
-                  else:
-                      print(f"Skipping: path not found and insertion failed for {service_section_key}.{'.'.join(rel_parts)}")
+          
+                  service_section_key = resolve_service_section_key(data, service)
+                  if not service_section_key:
                       skipped += 1
                       continue
-
-              full_parts = [service_section_key] + chosen_parts
-              line_no = get_value_line(data, full_parts)
-
-              if line_no is None or line_no >= len(lines):
-                  print(f"Skipping: could not locate line for {'.'.join(str(p) for p in full_parts)}")
-                  skipped += 1
-                  continue
-
-              new_line = patch_line(lines[line_no], full_parts[-1], value)
-              if new_line is None:
-                  print(f"Skipping: line regex did not match for {'.'.join(str(p) for p in full_parts)}")
-                  skipped += 1
-                  continue
-
-              dotted = ".".join(str(p) for p in full_parts)
-              print(f"Patching line {line_no + 1}: {dotted} = {json.dumps(value)}")
-              lines[line_no] = new_line
-              applied += 1
-
-          if applied > 0:
-              file_path.write_text("".join(lines), encoding="utf-8")
-          else:
-              print("No updates applied; environment/qa-okd-values.yaml left untouched.")
-
-          print(f"Applied {applied} change(s), skipped {skipped} change(s).")
-          PY
+          
+                  service_root = data[service_section_key]
+          
+                  rel_key = key
+                  for prefix in (f"{service_section_key}.", f"{service_to_section(service)}.",
+                                 f"{service_to_camel(service)}."):
+                      if rel_key.startswith(prefix):
+                          rel_key = rel_key[len(prefix):]
+                          break
+          
+                  rel_parts = parse_path_parts(rel_key)
+                  if not rel_parts:
+                      skipped += 1
+                      continue
+          
+                  source_row = source_changes_lookup.get((service, key), {})
+                  old_value = source_row.get("old_value")
+          
+                  direct_exists, _ = get_by_path(service_root, rel_parts)
+                  chosen_parts = rel_parts if direct_exists else None
+          
+                  if chosen_parts is None:
+                      inserted = insert_nested_key(lines, data, service_section_key, rel_parts, value)
+                      if inserted:
+                          applied += 1
+                          continue
+                      else:
+                          skipped += 1
+                          continue
+          
+                  full_parts = [service_section_key] + chosen_parts
+                  line_no = get_value_line(data, full_parts)
+          
+                  if line_no is None or line_no >= len(lines):
+                      skipped += 1
+                      continue
+          
+                  new_line = patch_line(lines[line_no], full_parts[-1], value)
+                  if new_line is None:
+                      skipped += 1
+                      continue
+          
+                  lines[line_no] = new_line
+                  applied += 1
+          
+              if applied > 0:
+                  file_path.write_text("".join(lines), encoding="utf-8")
+                  print(f"Updated {file_path}")
+              else:
+                  print(f"No updates applied to {file_path}")
+          
+              print(f"{file_path}: Applied {applied}, skipped {skipped}")
+          
+                    with changes_path.open("r", encoding="utf-8") as f:
+                        rows = json.load(f)
+          
+                    source_changes_lookup = {}
+                    if source_changes_path.exists():
+                        with source_changes_path.open("r", encoding="utf-8") as f:
+                            for r in json.load(f):
+                                source_changes_lookup[(r.get("service"), r.get("key"))] = r
+          
+                    original_text = file_path.read_text(encoding="utf-8")
+                    yaml_parser = YAML(typ="rt")
+                    yaml_parser.preserve_quotes = True
+                    data = yaml_parser.load(original_text) or {}
+          
+                    lines = original_text.splitlines(keepends=True)
+                    if lines and not lines[-1].endswith('\n'):
+                        lines[-1] += '\n'
+          
+                    applied = 0
+                    skipped = 0
+          
+                    for row in rows:
+                        service = row.get("service")
+                        key = row.get("key")
+                        value = row.get("value")
+          
+                        if not service or not key:
+                            print(f"Skipping invalid row: {row}")
+                            skipped += 1
+                            continue
+          
+                        service_section_key = resolve_service_section_key(data, service)
+                        if not service_section_key:
+                            print(f"Skipping: no service section found for '{service}' (case-insensitive)")
+                            skipped += 1
+                            continue
+          
+                        service_root = data[service_section_key]
+          
+                        # Strip any service-prefix from the key.
+                        rel_key = key
+                        for prefix in (f"{service_section_key}.", f"{service_to_section(service)}.",
+                                       f"{service_to_camel(service)}."):
+                            if rel_key.startswith(prefix):
+                                rel_key = rel_key[len(prefix):]
+                                break
+          
+                        rel_parts = parse_path_parts(rel_key)
+                        if not rel_parts:
+                            print(f"Skipping empty path for row: {row}")
+                            skipped += 1
+                            continue
+          
+                        source_row = source_changes_lookup.get((service, key), {})
+                        old_value = source_row.get("old_value")
+          
+                        direct_exists, _ = get_by_path(service_root, rel_parts)
+                        chosen_parts = rel_parts if direct_exists else None
+          
+                        if chosen_parts is None:
+                            candidates = [
+                                (p, v) for p, v in iter_scalar_paths(service_root, [])
+                                if matches_tail(p, rel_parts) or p[-1:] == rel_parts[-1:]
+                            ]
+                            if old_value is not None:
+                                narrow = [c for c in candidates if c[1] == old_value]
+                                if narrow:
+                                    candidates = narrow
+                            if len(candidates) == 1:
+                                chosen_parts = candidates[0][0]
+                            elif len(candidates) > 1:
+                                paths_str = ", ".join(".".join(str(x) for x in c[0]) for c in candidates)
+                                print(f"Skipping ambiguous match for {service_section_key}.{rel_key}: [{paths_str}]")
+                                skipped += 1
+                                continue
+          
+                        if chosen_parts is None:
+                            # Try to insert as a new nested key (handles deep parents)
+                            inserted = insert_nested_key(lines, data, service_section_key, rel_parts, value, separator='.')
+                            if inserted:
+                                applied += 1
+                                continue
+                            else:
+                                print(f"Skipping: path not found and insertion failed for {service_section_key}.{'.'.join(rel_parts)}")
+                                skipped += 1
+                                continue
+          
+                        full_parts = [service_section_key] + chosen_parts
+                        line_no = get_value_line(data, full_parts)
+          
+                        if line_no is None or line_no >= len(lines):
+                            print(f"Skipping: could not locate line for {'.'.join(str(p) for p in full_parts)}")
+                            skipped += 1
+                            continue
+          
+                        new_line = patch_line(lines[line_no], full_parts[-1], value)
+                        if new_line is None:
+                            print(f"Skipping: line regex did not match for {'.'.join(str(p) for p in full_parts)}")
+                            skipped += 1
+                            continue
+          
+                        dotted = ".".join(str(p) for p in full_parts)
+                        print(f"Patching line {line_no + 1}: {dotted} = {json.dumps(value)}")
+                        lines[line_no] = new_line
+                        applied += 1
+          
+                    if applied > 0:
+                        file_path.write_text("".join(lines), encoding="utf-8")
+                    else:
+                        print("No updates applied; environment/qa-okd-values.yaml left untouched.")
+          
+                    print(f"Applied {applied} change(s), skipped {skipped} change(s).")
+                    PY
 
           git diff
 
