@@ -54,7 +54,7 @@ config:
   DAPR_SECRET_KEY3: "db-password-postgres"
   Dapr__SecretDbPath: "platform-service-channel"
   Dapr__SecretKeyConnectionString: "db-connection-string-postgres"
-  Dapr__SecretKeyUsername: "db-Tps-postgres"
+  Dapr__SecretKeyUsername: "krjo9222"
   Dapr__SecretKeyPassword: "db-password-postgres"
   DB_HOST: "postgresql"
   REDIS_HOST: "redis"
