@@ -342,16 +342,12 @@ jobs:
               leaf = path_parts[-1]
               try:
                   if isinstance(cur, dict):
-                      # For a dict, the line of the key is stored in .lc.value(key)
                       row, _ = cur.lc.value(leaf)
                       return row
                   elif isinstance(cur, list):
-                      # For a list, use .lc.item(index)
-                      # leaf is the index (int)
                       row, _ = cur.lc.item(leaf)
                       return row
                   else:
-                      # Should not happen for a node that is a mapping or sequence
                       return get_value_line(data, path_parts)
               except Exception:
                   return None
@@ -392,6 +388,33 @@ jobs:
               return prefix + new_val_str + comment_part + ending
 
 
+          # --------------- HELPER FOR INDENTATION DETECTION ---------------
+
+          def get_child_indentation(lines, parent_line_no, parent_indent):
+              """
+              Scan lines after parent_line_no until indentation <= parent_indent.
+              Find the first non‑empty, non‑comment line that contains a colon (':')
+              and return its leading spaces. If no such child exists, return parent_indent + 2.
+              """
+              child_indent = parent_indent + 2  # default
+              i = parent_line_no + 1
+              while i < len(lines):
+                  line = lines[i]
+                  if not line.strip():
+                      i += 1
+                      continue
+                  # Stop when indentation is less or equal to parent (end of block)
+                  line_indent = len(line) - len(line.lstrip())
+                  if line_indent <= parent_indent:
+                      break
+                  # Look for a key (contains ':') that is not a comment line
+                  if ':' in line and not line.lstrip().startswith('#'):
+                      child_indent = line_indent
+                      break
+                  i += 1
+              return child_indent
+
+
           # --------------- ADVANCED NESTED INSERTION ---------------
 
           def insert_nested_key(lines, data, service_section_key, key_parts, value, separator='.'):
@@ -424,7 +447,7 @@ jobs:
 
               # Check from longest parent downwards
               for i in range(len(key_parts)-1, 0, -1):
-                  candidate_parts = full_path_base + key_parts[:i]   # e.g., [AuditTrailService, resources, limits]
+                  candidate_parts = full_path_base + key_parts[:i]
                   line_no = get_node_line(data, candidate_parts)
                   if line_no is not None:
                       deepest_parent_parts = key_parts[:i]
@@ -436,10 +459,11 @@ jobs:
                   print(f"No existing parent for '{'.'.join(key_parts)}'. Inserting as flat key.")
                   return insert_flat_key_at_level(lines, start_idx, base_indent, separator.join(key_parts), value)
 
-              # Now we have the line number where the deepest parent starts (e.g., line of 'limits:')
+              # Now we have the line number where the deepest parent starts
               parent_line = lines[parent_line_no]
               parent_indent = len(parent_line) - len(parent_line.lstrip())
-              child_indent = parent_indent + 2
+              # Use detected indentation of existing children (if any)
+              child_indent = get_child_indentation(lines, parent_line_no, parent_indent)
 
               # Find the end of the parent block (next line with same or less indentation)
               end_idx = parent_line_no + 1
@@ -463,14 +487,26 @@ jobs:
               return True
 
           def insert_flat_key_at_level(lines, start_idx, base_indent, flat_key, value):
-              """Helper to insert a flat key at the end of the service section."""
-              child_indent = base_indent + 2
+              """Insert a flat key at the end of the service section, using existing child indentation."""
+              # Find the end of the service section block (first line with indentation <= base_indent)
               end_idx = start_idx + 1
               while end_idx < len(lines):
                   line = lines[end_idx]
                   if line.strip() and not line.startswith(' ' * (base_indent + 2)):
                       break
                   end_idx += 1
+
+              # Detect existing child indentation under this service section
+              child_indent = base_indent + 2  # default
+              for i in range(start_idx + 1, end_idx):
+                  line = lines[i]
+                  if not line.strip():
+                      continue
+                  line_indent = len(line) - len(line.lstrip())
+                  if line_indent > base_indent:
+                      child_indent = line_indent
+                      break
+
               flat_key_line = f"{' ' * child_indent}{flat_key}: {scalar_to_str(value)}\n"
               lines.insert(end_idx, flat_key_line)
               print(f"Inserted flat key '{flat_key}' at end of section")
@@ -529,7 +565,7 @@ jobs:
               # Strip any service-prefix from the key.
               rel_key = key
               for prefix in (f"{service_section_key}.", f"{service_to_section(service)}.",
-                             f"{service_to_camel(service)}."):
+                          f"{service_to_camel(service)}."):
                   if rel_key.startswith(prefix):
                       rel_key = rel_key[len(prefix):]
                       break
@@ -600,8 +636,6 @@ jobs:
 
           print(f"Applied {applied} change(s), skipped {skipped} change(s).")
           PY
-
-          git diff
 
       # =========================
       # Create PR
