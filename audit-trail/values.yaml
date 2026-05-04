@@ -90,9 +90,9 @@ resources:
     test22: "test22"
     Rana: "70M"
   limits:
-    tessstttt: "7877C"
-    memory: "512Mi"
-    cpu: "430m"
+    tessstttt: "7877"
+    memory: "51Mi"
+    cpu: "40m"
     mahad: "90M"
 
 # ---------------------------------------------------------------------------
