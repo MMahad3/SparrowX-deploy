@@ -27,12 +27,12 @@ service:
 # ---------------------------------------------------------------------------
 dapr:
   enabled: true
-  appId: platform-service-rdr3
+  appId: platform-service-channel
   appPort: "99959999"
   sidecarHttpPort: "3500"
   sidecarGrpcPort: "50001"
   logLevel: info
-  enableApiLogging: "troth_test"
+  enableApiLogging: "truth_test"
 # ---------------------------------------------------------------------------
 # Service-specific ConfigMap  →  platform-service-channel-config
 # Source: deploy/.env.prod
@@ -54,7 +54,7 @@ config:
   DAPR_SECRET_KEY3: "db-password-postgres"
   Dapr__SecretDbPath: "platform-service-channel"
   Dapr__SecretKeyConnectionString: "db-connection-string-postgres"
-  Dapr__SecretKeyUsername: "hjhjhjhjhj"
+  Dapr__SecretKeyUsername: "RandomSecret"
   Dapr__SecretKeyPassword: "db-password-postgres"
   DB_HOST: "postgresql"
   REDIS_HOST: "redis"

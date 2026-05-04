@@ -32,9 +32,9 @@ service:
 # ---------------------------------------------------------------------------
 dapr:
   enabled: true
-  appId: Mahad77__MUnir
-  appPort: "6007300067"
-  environment: shadybell21899
+  appId: RandomAppId
+  appPort: "8993"
+  environment: RandomEnv
   sidecarHttpPort: "3500"
   sidecarGrpcPort: "50001"
   logLevel: info
@@ -48,11 +48,11 @@ config:
   APP_VERSION: "1.0.0"
   SERVER_PORT: "8080"
   HEALTH_PORT: "8080"
-  LIVENESS_PROBE_PATH: "CMOwwwwwyaarN"
+  LIVENESS_PROBE_PATH: "RandomPath"
   READINESS_PROBE_PATH: "test32test"
   LIVENESS_INITIAL_DELAY: "30"
   READINESS_INITIAL_DELAY: "15"
-  DAPR_GRPC_PORT: "909090"
+  DAPR_GRPC_PORT: "8000"
   DAPR_SECRET_DB_PATH: "platform-service-audit-trail"
   DAPR_SECRET_KEY1: "db-connection-string-postgres"
   Dapr__SecretDbPath: "platform-service-audit-trail"
@@ -92,7 +92,7 @@ resources:
   limits:
     tessstttt: "7877C"
     memory: "512Mi"
-    cpu: "6969696MMM"
+    cpu: "430m"
     mahad: "90M"
 
 # ---------------------------------------------------------------------------
