@@ -87,13 +87,13 @@ resources:
   requests:
     memory: "256Mi"
     cpu: "100m"
-    test22: "test22"
+    memory: "test22"
     Rana: "70M"
   limits:
     tessstttt: "7877"
     memory: "51Mi"
     cpu: "40m"
-    mahad: "90M"
+    cpu: "90M"
 
 # ---------------------------------------------------------------------------
 # Security contexts (non-root, UID 1001 matching Dockerfile appuser)
