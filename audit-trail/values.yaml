@@ -140,7 +140,7 @@ probes:
 # ---------------------------------------------------------------------------
 autoscaling:
   enabled: false
-  minReplicas: 1
+  minReplicas: 66
   maxReplicas: 5
   targetCPUUtilizationPercentage: 70
   targetMemoryUtilizationPercentage: 80
