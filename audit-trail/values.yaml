@@ -9,7 +9,7 @@ image:
   repository: devopstps/platform-service-audit-trail
   pullPolicy: IfNotPresent
   # Override with image digest or tag at deploy time, e.g. --set image.tag=sha-abc123
-  tag: "v0.0.6"
+  tag: "v0.0.9"
 
 nameOverride: ""
 fullnameOverride: ""
@@ -36,7 +36,7 @@ dapr:
   appPort: "8080"
   sidecarHttpPort: "3500"
   sidecarGrpcPort: "50001"
-  logLevel: infomration
+  logLevel: info
   enableApiLogging: "false"
 
 # ---------------------------------------------------------------------------
@@ -46,24 +46,31 @@ dapr:
 config:
   ASPNETCORE_ENVIRONMENT: "Production"
   ASPNETCORE_URLS: "http://+:8080"
-  APP_VERSION: "1.0.0"
-  SERVER_PORT: "9090"
-  HEALTH_PORT: "8080"
-  LIVENESS_PROBE_PATH: "/alive"
-  READINESS_PROBE_PATH: "/ready"
-  LIVENESS_INITIAL_DELAY: "30"
-  READINESS_INITIAL_DELAY: "15"
   DAPR_SECRET_DB_PATH: "platform-service-audit-trail"
   DAPR_SECRET_KEY1: "postgresql-connectionstring"
-  Test: test
 
+  Dapr__StateStoreName: "statestore"
+  Dapr__SecretStoreName: "vault"
+  
   # SDK Database config - NOTE: Database__SecretStoreName should ideally be in infra-configmap
   # The infra-configmap has Dapr__SecretStoreName but SDK uses Database:SecretStoreName
   Database__SecretStoreName: "vault"
   Database__SecretDbPath: "platform-service-audit-trail"
+  Database__FallbackConnectionString: "<YOUR_FALLBACK_CONNECTION_STRING_HERE>"
+  Database__ConnectionTimeout: "30"
+  Database__CommandTimeout: "30"
   Database__ConnectionStringSecretKey: "postgresql-connectionstring"
+
+  AuditDaprPubSub__PubSubComponentName: "pubsub"
   AuditDaprPubSub__AuditEventsTopic: "audit-events"
   AuditDaprPubSub__AuditEventsSubscriptionName: "audit-trail-service"
+
+  SWAGGER__SERVERURL: "/audit-trail/"
+  OTEL_SERVICE_NAME: "platform-service-audit-trail"
+  OTEL_DOTNET_AUTO_METRICS_ADDITIONAL_SOURCES: "platform-service-audit-trail,System.Runtime,Microsoft.AspNetCore.Hosting"
+  OTEL_DOTNET_AUTO_TRACES_ADDITIONAL_SOURCES: "platform-service-audit-trail"
+  Serilog__WriteTo__1__Args__resourceAttributes__deployment.environment: production
+  Serilog__WriteTo__1__Args__resourceAttributes__service.name: platform-service-audit-trail
 
 # ---------------------------------------------------------------------------
 # Infra ConfigMap (pre-existing — populated by the infra namespace pipeline)
@@ -94,7 +101,7 @@ resources:
     cpu: "100m"
   limits:
     memory: "512Mi"
-    cpu: "5010m"
+    cpu: "500m"
 
 # ---------------------------------------------------------------------------
 # Security contexts (non-root, UID 1001 matching Dockerfile appuser)
@@ -117,7 +124,13 @@ containerSecurityContext:
 logs:
   enabled: true
   mountPath: /app/logs
-
+# ---------------------------------------------------------------------------
+# Grafana Dashboards ConfigMap
+# Embeds dashboard JSON directly into ConfigMap for provisioning
+# ConfigMap labeled with grafana_dashboard=1 for sidecar discovery
+# ---------------------------------------------------------------------------
+dashboards:
+  enabled: true
 # ---------------------------------------------------------------------------
 # Liveness / Readiness probes
 # ---------------------------------------------------------------------------
@@ -140,7 +153,7 @@ probes:
 # ---------------------------------------------------------------------------
 autoscaling:
   enabled: false
-  minReplicas: 66
+  minReplicas: 1
   maxReplicas: 5
   targetCPUUtilizationPercentage: 70
   targetMemoryUtilizationPercentage: 80
