@@ -1,0 +1,8 @@
+apiVersion: v2
+name: platform-back-office
+description: >
+  Helm chart for Platform X Back-Office Portal.
+  Next.js frontend application providing administrative dashboard and management UI.
+type: application
+version: 0.1.0
+appVersion: "2.0.2"
