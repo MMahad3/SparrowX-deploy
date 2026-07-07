@@ -1,0 +1,7 @@
+apiVersion: v2
+name: platform-service-channel
+description: >
+  Helm chart for platform-service-channel.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
